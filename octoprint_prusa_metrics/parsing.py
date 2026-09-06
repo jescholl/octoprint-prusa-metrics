@@ -23,6 +23,10 @@ _E_PARAM_RE = re.compile(r"\bE(-?\d+(?:\.\d+)?)")
 _S_PARAM_RE = re.compile(r"\bS(\d+(?:\.\d+)?)")
 _MOVE_RE = re.compile(r"^G[01]\b")
 _G92_RE = re.compile(r"^G92\b")
+_G28_RE = re.compile(r"^G28\b")
+_AXIS_RES = {axis: re.compile(rf"\b{axis}(-?\d+(?:\.\d+)?)") for axis in ("X", "Y", "Z")}
+# G28 names axes with no value ("G28 X"), so presence alone must be detected.
+_AXIS_PRESENT_RES = {axis: re.compile(rf"\b{axis}") for axis in ("X", "Y", "Z")}
 
 
 def strip_gcode_comment(line):
@@ -130,6 +134,72 @@ class ExtrusionTracker:
         # counting as filament consumed, so only positive deltas accumulate.
         if delta > 0:
             self.total_mm += delta
+
+
+class MovementTracker:
+    """Accumulates per-axis travel distance from the outgoing gcode stream.
+
+    XYZ positioning mode is set by ``G90``/``G91``, which is independent of the
+    ``M82``/``M83`` mode that governs extrusion, so this tracks its own state
+    rather than sharing :class:`ExtrusionTracker`'s.
+
+    Arc moves (``G2``/``G3``) are not counted; PrusaSlicer emits linear moves.
+    """
+
+    AXES = ("X", "Y", "Z")
+
+    def __init__(self, relative=False):
+        self.relative = relative
+        self.totals = dict.fromkeys(self.AXES, 0.0)
+        self._pos = dict.fromkeys(self.AXES, 0.0)
+
+    def feed(self, raw_line):
+        line = strip_gcode_comment(raw_line).upper()
+        if not line:
+            return
+
+        if line.startswith("G90"):
+            self.relative = False
+            return
+        if line.startswith("G91"):
+            self.relative = True
+            return
+
+        if _G28_RE.match(line):
+            # Homing travels an indeterminate distance, so reset the origin
+            # without attributing any travel to it. A bare G28 (or Prusa's
+            # "G28 W") homes every axis.
+            named = [a for a in self.AXES if _AXIS_PRESENT_RES[a].search(line)]
+            for axis in named or self.AXES:
+                self._pos[axis] = 0.0
+            return
+
+        if _G92_RE.match(line):
+            named = [a for a in self.AXES if _AXIS_RES[a].search(line)]
+            if named:
+                for axis in named:
+                    self._pos[axis] = float(_AXIS_RES[axis].search(line).group(1))
+            elif not _E_PARAM_RE.search(line):
+                # Bare G92 resets everything; "G92 E0" must not touch XYZ.
+                for axis in self.AXES:
+                    self._pos[axis] = 0.0
+            return
+
+        if not _MOVE_RE.match(line):
+            return
+
+        for axis in self.AXES:
+            match = _AXIS_RES[axis].search(line)
+            if not match:
+                continue
+            value = float(match.group(1))
+            if self.relative:
+                delta = value
+                self._pos[axis] += value
+            else:
+                delta = value - self._pos[axis]
+                self._pos[axis] = value
+            self.totals[axis] += abs(delta)
 
 
 def parse_fan_speed(raw_line, current):

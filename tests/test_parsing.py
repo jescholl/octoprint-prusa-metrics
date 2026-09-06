@@ -1,5 +1,6 @@
 from octoprint_prusa_metrics.parsing import (
     ExtrusionTracker,
+    MovementTracker,
     extract_version,
     firmware_labels,
     parse_fan_speed,
@@ -155,6 +156,107 @@ class TestExtrusionTracker:
         tracker.feed("G92 E0")
         tracker.feed("G1 E3")
         assert tracker.total_mm == 5.0
+
+
+class TestMovementTracker:
+    def test_absolute_moves_accumulate_distance(self):
+        t = MovementTracker()
+        t.feed("G90")
+        t.feed("G1 X10 Y20")
+        t.feed("G1 X30 Y20")
+        assert t.totals["X"] == 30.0
+        assert t.totals["Y"] == 20.0
+
+    def test_relative_moves_accumulate(self):
+        t = MovementTracker()
+        t.feed("G91")
+        t.feed("G1 X5")
+        t.feed("G1 X5")
+        assert t.totals["X"] == 10.0
+
+    def test_negative_moves_count_as_distance_travelled(self):
+        t = MovementTracker()
+        t.feed("G90")
+        t.feed("G1 X10")
+        t.feed("G1 X0")
+        assert t.totals["X"] == 20.0
+
+    def test_z_tracked_independently(self):
+        t = MovementTracker()
+        t.feed("G90")
+        t.feed("G1 Z0.2")
+        t.feed("G1 Z0.4")
+        assert round(t.totals["Z"], 6) == 0.4
+        assert t.totals["X"] == 0.0
+
+    def test_homing_resets_origin_without_adding_travel(self):
+        t = MovementTracker()
+        t.feed("G90")
+        t.feed("G1 X50")
+        t.feed("G28")
+        t.feed("G1 X10")
+        # 50 to get there, then 10 from the new origin -- homing itself is not
+        # attributed any distance.
+        assert t.totals["X"] == 60.0
+
+    def test_prusa_g28_w_homes_all_axes(self):
+        t = MovementTracker()
+        t.feed("G90")
+        t.feed("G1 X50 Y50")
+        t.feed("G28 W")
+        t.feed("G1 X5 Y5")
+        assert t.totals["X"] == 55.0
+        assert t.totals["Y"] == 55.0
+
+    def test_partial_homing_only_resets_named_axis(self):
+        t = MovementTracker()
+        t.feed("G90")
+        t.feed("G1 X50 Y50")
+        t.feed("G28 X")
+        t.feed("G1 X10 Y50")
+        assert t.totals["X"] == 60.0
+        assert t.totals["Y"] == 50.0
+
+    def test_g92_e0_does_not_reset_xyz(self):
+        # The single most common G92 in slicer output; it must not be mistaken
+        # for a positional reset.
+        t = MovementTracker()
+        t.feed("G90")
+        t.feed("G1 X10")
+        t.feed("G92 E0")
+        t.feed("G1 X20")
+        assert t.totals["X"] == 20.0
+
+    def test_g92_with_axis_sets_origin(self):
+        t = MovementTracker()
+        t.feed("G90")
+        t.feed("G1 X10")
+        t.feed("G92 X0")
+        t.feed("G1 X5")
+        assert t.totals["X"] == 15.0
+
+    def test_bare_g92_resets_all_axes(self):
+        t = MovementTracker()
+        t.feed("G90")
+        t.feed("G1 X10 Y10")
+        t.feed("G92")
+        t.feed("G1 X1 Y1")
+        assert t.totals["X"] == 11.0
+        assert t.totals["Y"] == 11.0
+
+    def test_non_move_and_feedrate_only_lines_ignored(self):
+        t = MovementTracker()
+        t.feed("G90")
+        t.feed("M104 S210")
+        t.feed("G1 F1800")
+        t.feed("; G1 X99 in a comment")
+        assert t.totals["X"] == 0.0
+
+    def test_arc_moves_are_not_counted(self):
+        t = MovementTracker()
+        t.feed("G90")
+        t.feed("G2 X10 Y10 I5 J5")
+        assert t.totals["X"] == 0.0
 
 
 class TestParseFanSpeed:

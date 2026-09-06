@@ -134,7 +134,34 @@ class TestEvents:
         plugin.on_event(Events.PRINT_DONE, {"time": 60})
         snapshot = plugin.build_snapshot()
         assert snapshot["extrusion_total_mm"] == 17.0
-        assert snapshot["last_print_extrusion_mm"] == 7.0
+        assert snapshot["last_print"]["extrusion"] == 7.0
+        # No longer printing, so the live set is withdrawn.
+        assert snapshot["current_print"] is None
+
+    def test_live_per_print_figures_while_printing(self, plugin):
+        plugin.on_gcode_sent(None, "sending", "M83", None, "M83")
+        plugin.on_gcode_sent(None, "sending", "G90", None, "G90")
+        plugin.on_gcode_sent(None, "sending", "G1 X5 E2", None, "G1")
+        plugin.on_event(Events.PRINT_STARTED, {})
+        plugin.on_gcode_sent(None, "sending", "G1 X15 E3", None, "G1")
+        snapshot = plugin.build_snapshot()
+        assert snapshot["current_print"]["extrusion"] == 3.0
+        assert snapshot["current_print"]["X"] == 10.0
+        # Lifetime totals still include the pre-print movement.
+        assert snapshot["extrusion_total_mm"] == 5.0
+        assert snapshot["travel_total_mm"]["X"] == 15.0
+
+    def test_timelapse_counters(self, plugin):
+        plugin.on_event(Events.CAPTURE_DONE, {})
+        plugin.on_event(Events.CAPTURE_DONE, {})
+        plugin.on_event(Events.MOVIE_DONE, {})
+        snapshot = plugin.build_snapshot()
+        assert snapshot["timelapse_captures"] == 2
+        assert snapshot["timelapse_renders"] == 1
+
+    def test_slicing_progress_recorded(self, plugin):
+        plugin.on_slicing_progress("cura", "local", "in.stl", "local", "out.gcode", 42)
+        assert plugin.build_snapshot()["slice_progress"] == 42
 
     def test_print_done_without_time_payload(self, plugin):
         plugin.on_event(Events.PRINT_DONE, {})

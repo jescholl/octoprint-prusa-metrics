@@ -24,6 +24,8 @@ STATE_FLAGS = (
 
 PRINT_RESULTS = ("started", "done", "failed", "cancelled")
 
+AXES = ("X", "Y", "Z")
+
 
 def _gauge(name, documentation, value, labels=None):
     if labels:
@@ -109,6 +111,14 @@ def _build_state(snapshot):
             fan_speed,
         )
 
+    slice_progress = snapshot.get("slice_progress")
+    if slice_progress is not None:
+        yield _gauge(
+            "slice_progress_percent",
+            "Progress of the current slicing job, 0-100.",
+            slice_progress,
+        )
+
 
 def _build_temperatures(snapshot):
     temperatures = snapshot.get("temperatures") or {}
@@ -191,6 +201,28 @@ def _build_counters(snapshot):
         value=snapshot.get("extrusion_total_mm", 0),
     )
 
+    travel = snapshot.get("travel_total_mm") or {}
+    family = CounterMetricFamily(
+        f"{PREFIX}_travel_mm",
+        "Cumulative axis travel since plugin start. Useful as a wear proxy for "
+        "belts, bearings and lubrication intervals.",
+        labels=["axis"],
+    )
+    for axis in AXES:
+        family.add_metric([axis.lower()], travel.get(axis, 0))
+    yield family
+
+    yield CounterMetricFamily(
+        f"{PREFIX}_timelapse_captures",
+        "Timelapse frames captured (one per CaptureDone, not per movie).",
+        value=snapshot.get("timelapse_captures", 0),
+    )
+    yield CounterMetricFamily(
+        f"{PREFIX}_timelapse_renders",
+        "Timelapse movies successfully rendered.",
+        value=snapshot.get("timelapse_renders", 0),
+    )
+
     last_print_time = snapshot.get("last_print_time")
     if last_print_time is not None:
         yield _gauge(
@@ -198,10 +230,33 @@ def _build_counters(snapshot):
             "Duration of the most recently completed print.",
             last_print_time,
         )
-    last_extrusion = snapshot.get("last_print_extrusion_mm")
-    if last_extrusion is not None:
+
+    # Live figures for the running print, and the frozen set from the last one.
+    yield from _build_per_print(snapshot.get("current_print"), "print")
+    yield from _build_per_print(snapshot.get("last_print"), "last_print")
+
+
+def _build_per_print(totals, prefix):
+    """Emit extrusion/travel for one print, live or most-recent."""
+    if not totals:
+        return
+
+    if totals.get("extrusion") is not None:
         yield _gauge(
-            "last_print_extrusion_mm",
-            "Filament extruded during the most recently completed print.",
-            last_extrusion,
+            f"{prefix}_extrusion_mm",
+            "Filament extruded during this print."
+            if prefix == "print"
+            else "Filament extruded during the most recently completed print.",
+            totals["extrusion"],
         )
+
+    family = GaugeMetricFamily(
+        f"{PREFIX}_{prefix}_travel_mm",
+        "Axis travel during this print."
+        if prefix == "print"
+        else "Axis travel during the most recently completed print.",
+        labels=["axis"],
+    )
+    for axis in AXES:
+        family.add_metric([axis.lower()], totals.get(axis, 0))
+    yield family

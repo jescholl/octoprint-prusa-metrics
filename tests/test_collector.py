@@ -28,11 +28,16 @@ def snapshot():
         },
         "clients": 2,
         "fan_speed": 128.0,
+        "slice_progress": 60.0,
         "prints": {"started": 5, "done": 3, "failed": 1, "cancelled": 1},
         "print_time_total": 9000,
         "extrusion_total_mm": 1234.5,
+        "travel_total_mm": {"X": 5000.0, "Y": 4000.0, "Z": 300.0},
+        "timelapse_captures": 12,
+        "timelapse_renders": 2,
         "last_print_time": 3000,
-        "last_print_extrusion_mm": 400.0,
+        "current_print": {"extrusion": 120.0, "X": 900.0, "Y": 800.0, "Z": 40.0},
+        "last_print": {"extrusion": 400.0, "X": 2000.0, "Y": 1800.0, "Z": 90.0},
     }
 
 
@@ -106,6 +111,41 @@ class TestExposition:
 
     def test_empty_snapshot_does_not_raise(self):
         assert render({})
+
+    def test_axis_travel_counters(self, snapshot):
+        output = render(snapshot)
+        assert 'octoprint_travel_mm_total{axis="x"} 5000.0' in output
+        assert 'octoprint_travel_mm_total{axis="z"} 300.0' in output
+
+    def test_timelapse_counters(self, snapshot):
+        output = render(snapshot)
+        assert "octoprint_timelapse_captures_total 12.0" in output
+        assert "octoprint_timelapse_renders_total 2.0" in output
+
+    def test_slice_progress(self, snapshot):
+        assert "octoprint_slice_progress_percent 60.0" in render(snapshot)
+
+    def test_slice_progress_omitted_when_not_slicing(self, snapshot):
+        snapshot["slice_progress"] = None
+        assert "octoprint_slice_progress_percent" not in render(snapshot)
+
+    def test_live_per_print_figures(self, snapshot):
+        output = render(snapshot)
+        assert "octoprint_print_extrusion_mm 120.0" in output
+        assert 'octoprint_print_travel_mm{axis="x"} 900.0' in output
+
+    def test_live_per_print_figures_withdrawn_between_prints(self, snapshot):
+        snapshot["current_print"] = None
+        output = render(snapshot)
+        assert "octoprint_print_extrusion_mm" not in output
+        assert "octoprint_print_travel_mm" not in output
+        # The frozen set from the previous print remains.
+        assert "octoprint_last_print_extrusion_mm 400.0" in output
+
+    def test_last_print_figures(self, snapshot):
+        output = render(snapshot)
+        assert "octoprint_last_print_extrusion_mm 400.0" in output
+        assert 'octoprint_last_print_travel_mm{axis="y"} 1800.0' in output
 
     def test_no_file_path_labels_are_emitted(self, snapshot):
         # Job file names can carry personal/model detail; deliberately excluded.

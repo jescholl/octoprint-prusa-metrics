@@ -15,7 +15,14 @@ from octoprint.events import Events
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest
 
 from .collector import build_metrics
-from .parsing import ExtrusionTracker, firmware_labels, parse_fan_speed, parse_m115, parse_mmu_line
+from .parsing import (
+    ExtrusionTracker,
+    MovementTracker,
+    firmware_labels,
+    parse_fan_speed,
+    parse_m115,
+    parse_mmu_line,
+)
 
 __plugin_name__ = "Prusa Metrics"
 __plugin_pythoncompat__ = ">=3.7,<4"
@@ -34,6 +41,7 @@ class _SnapshotCollector:
 class PrusaMetricsPlugin(
     octoprint.plugin.StartupPlugin,
     octoprint.plugin.EventHandlerPlugin,
+    octoprint.plugin.ProgressPlugin,
     octoprint.plugin.BlueprintPlugin,
 ):
     def __init__(self):
@@ -45,11 +53,19 @@ class PrusaMetricsPlugin(
         self._clients = 0
         self._fan_speed = 0.0
         self._extrusion = ExtrusionTracker()
+        self._movement = MovementTracker()
         self._prints = {"started": 0, "done": 0, "failed": 0, "cancelled": 0}
         self._print_time_total = 0.0
         self._last_print_time = None
-        self._last_print_extrusion = None
-        self._extrusion_at_print_start = 0.0
+        self._timelapse_captures = 0
+        self._timelapse_renders = 0
+        self._slice_progress = None
+        # Per-print figures are derived by diffing the lifetime totals against
+        # a baseline captured at PrintStarted, so there is only ever one source
+        # of truth for each quantity.
+        self._printing = False
+        self._print_baseline = self._totals()
+        self._last_print_totals = None
 
     # ~~ StartupPlugin
 
@@ -102,7 +118,24 @@ class PrusaMetricsPlugin(
             return
         with self._lock:
             self._extrusion.feed(cmd)
+            self._movement.feed(cmd)
             self._fan_speed = parse_fan_speed(cmd, self._fan_speed)
+
+    # ~~ ProgressPlugin
+
+    def on_slicing_progress(
+        self,
+        slicer,
+        source_location,
+        source_path,
+        destination_location,
+        destination_path,
+        progress,
+    ):
+        # Deliberately unlabelled by path: a per-file label would add a new
+        # timeseries for every model ever sliced, and leak model names.
+        with self._lock:
+            self._slice_progress = progress
 
     # ~~ EventHandlerPlugin
 
@@ -114,7 +147,8 @@ class PrusaMetricsPlugin(
                 self._clients = max(0, self._clients - 1)
             elif event == Events.PRINT_STARTED:
                 self._prints["started"] += 1
-                self._extrusion_at_print_start = self._extrusion.total_mm
+                self._printing = True
+                self._print_baseline = self._totals()
             elif event == Events.PRINT_DONE:
                 self._prints["done"] += 1
                 self._record_print_finished(payload)
@@ -124,13 +158,29 @@ class PrusaMetricsPlugin(
             elif event == Events.PRINT_CANCELLED:
                 self._prints["cancelled"] += 1
                 self._record_print_finished(payload)
+            elif event == Events.CAPTURE_DONE:
+                # One timelapse *frame*, not a finished movie.
+                self._timelapse_captures += 1
+            elif event == Events.MOVIE_DONE:
+                self._timelapse_renders += 1
+
+    def _totals(self):
+        """Lifetime counters that per-print figures are diffed against."""
+        totals = {"extrusion": self._extrusion.total_mm}
+        totals.update(self._movement.totals)
+        return totals
+
+    def _since_baseline(self):
+        current = self._totals()
+        return {k: current[k] - self._print_baseline.get(k, 0.0) for k in current}
 
     def _record_print_finished(self, payload):
         elapsed = (payload or {}).get("time")
         if elapsed is not None:
             self._last_print_time = elapsed
             self._print_time_total += elapsed
-        self._last_print_extrusion = self._extrusion.total_mm - self._extrusion_at_print_start
+        self._last_print_totals = self._since_baseline()
+        self._printing = False
 
     # ~~ Snapshot
 
@@ -171,11 +221,18 @@ class PrusaMetricsPlugin(
                 },
                 "clients": self._clients,
                 "fan_speed": self._fan_speed,
+                "slice_progress": self._slice_progress,
                 "prints": dict(self._prints),
                 "print_time_total": self._print_time_total,
                 "extrusion_total_mm": self._extrusion.total_mm,
+                "travel_total_mm": dict(self._movement.totals),
+                "timelapse_captures": self._timelapse_captures,
+                "timelapse_renders": self._timelapse_renders,
                 "last_print_time": self._last_print_time,
-                "last_print_extrusion_mm": self._last_print_extrusion,
+                # Live per-print figures only while a print is running; the
+                # frozen last_print_* set is what remains between prints.
+                "current_print": self._since_baseline() if self._printing else None,
+                "last_print": dict(self._last_print_totals) if self._last_print_totals else None,
             }
 
 

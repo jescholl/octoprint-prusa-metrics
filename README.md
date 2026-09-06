@@ -33,15 +33,27 @@ publicly.
 | `octoprint_job_estimated_print_time_seconds` | gauge | Sliced estimate |
 | `octoprint_connected_clients` | gauge | Connected UI clients |
 | `octoprint_fan_speed` | gauge | Last commanded part-cooling fan speed, 0-255 |
+| `octoprint_slice_progress_percent` | gauge | Only while slicing |
 | `octoprint_prints_total{result}` | counter | `started`/`done`/`failed`/`cancelled` |
 | `octoprint_print_time_seconds_total` | counter | Cumulative print time |
 | `octoprint_extrusion_mm_total` | counter | Cumulative extruded filament |
+| `octoprint_travel_mm_total{axis}` | counter | Cumulative axis travel, `x`/`y`/`z` |
+| `octoprint_timelapse_captures_total` | counter | Frames captured |
+| `octoprint_timelapse_renders_total` | counter | Movies rendered |
+| `octoprint_print_extrusion_mm` | gauge | Filament used **this** print; only while printing |
+| `octoprint_print_travel_mm{axis}` | gauge | Axis travel **this** print; only while printing |
 | `octoprint_last_print_time_seconds` | gauge | Duration of last finished print |
 | `octoprint_last_print_extrusion_mm` | gauge | Filament used by last finished print |
+| `octoprint_last_print_travel_mm{axis}` | gauge | Axis travel of last finished print |
 
 Counters reset when OctoPrint restarts; use `rate()`/`increase()`.
 
-Job file names are deliberately **not** exposed as labels.
+Cumulative axis travel is a useful wear proxy for belts, bearings, and
+lubrication intervals.
+
+Job file names are deliberately **not** exposed as labels: a per-file label
+would create a new timeseries for every model ever printed, and leak model
+names into metrics.
 
 ### Caveats
 
@@ -53,8 +65,12 @@ Job file names are deliberately **not** exposed as labels.
   board over its own UART sub-protocol rather than the `M115` exchange. The
   plugin captures an `MMU…:` line opportunistically if the firmware emits one;
   on a given firmware it may simply never appear.
-- **Not collected:** Raspberry Pi core temperature (a host metric — use
-  node_exporter), X/Y/Z travel distance, timelapse count, and slicer progress.
+- **Not collected:** Raspberry Pi core temperature. That is a host metric, not
+  an OctoPrint one — use node_exporter, which also works when OctoPrint runs
+  somewhere other than a Pi.
+- **Arc moves (`G2`/`G3`) are not counted** toward axis travel; PrusaSlicer
+  emits linear moves. Homing resets the origin without being attributed any
+  travel, since the distance covered is indeterminate.
 
 ## Install
 
