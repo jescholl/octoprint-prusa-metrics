@@ -7,7 +7,10 @@ import re
 # spaces, so the only reliable delimiter is the start of the *next* all-caps key.
 _M115_KEY_RE = re.compile(r"\b(?P<key>[A-Z][A-Z0-9_]*):")
 
-_VERSION_RE = re.compile(r"(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.]+)?)")
+# The build-metadata charset includes "_" because Prusa firmware reports e.g.
+# "3.14.1+8237_74a577bc0"; without it the version truncates mid-string to
+# "3.14.1+8237", which is neither a clean version nor the full build id.
+_VERSION_RE = re.compile(r"(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z._]+)?)")
 
 # Prusa reports the MMU on its own line rather than inside M115, e.g.
 # ``MMU2:Version 3.0.3`` or ``MMU2:Not responding``. Captured opportunistically;

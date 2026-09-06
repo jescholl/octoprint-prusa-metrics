@@ -44,6 +44,14 @@ class TestExtractVersion:
         assert extract_version("Marlin 2.0") == "2.0"
         assert extract_version("Prusa-Firmware 3.14.1-RC1") == "3.14.1-RC1"
 
+    def test_keeps_full_build_metadata(self):
+        # Real string observed from the MK3S+: the build id contains an
+        # underscore, which previously truncated this to "3.14.1+8237".
+        assert (
+            extract_version("Prusa-Firmware 3.14.1+8237_74a577bc0 based on Marlin")
+            == "3.14.1+8237_74a577bc0"
+        )
+
     def test_empty_when_absent(self):
         assert extract_version("Prusa-Firmware") == ""
         assert extract_version("") == ""
@@ -59,6 +67,19 @@ class TestFirmwareLabels:
     def test_missing_fields_become_empty_strings(self):
         labels = firmware_labels({})
         assert set(labels.values()) == {""}
+
+    def test_real_printer_response(self):
+        # Captured verbatim from the MK3S+ connection handshake.
+        real = (
+            "FIRMWARE_NAME:Prusa-Firmware 3.14.1+8237_74a577bc0 based on Marlin "
+            "FIRMWARE_URL:https://github.com/prusa3d/Prusa-Firmware "
+            "PROTOCOL_VERSION:1.0 MACHINE_TYPE:Prusa i3 MK3S EXTRUDER_COUNT:1"
+        )
+        labels = firmware_labels(parse_m115(real))
+        assert labels["firmware_version"] == "3.14.1+8237_74a577bc0"
+        assert labels["firmware_name"] == "Prusa-Firmware 3.14.1+8237_74a577bc0 based on Marlin"
+        assert labels["machine_type"] == "Prusa i3 MK3S"
+        assert labels["extruder_count"] == "1"
 
 
 class TestParseMmuLine:

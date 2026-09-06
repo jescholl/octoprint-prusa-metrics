@@ -64,11 +64,14 @@ class PrusaMetricsPlugin(
 
     @octoprint.plugin.BlueprintPlugin.route("/metrics", methods=["GET"])
     def metrics_endpoint(self):
-        return flask.Response(generate_latest(self._registry), mimetype=CONTENT_TYPE_LATEST)
+        # content_type, not mimetype: CONTENT_TYPE_LATEST already carries a
+        # charset, and Flask appends another to a bare mimetype, yielding a
+        # malformed "...; charset=utf-8; charset=utf-8" header.
+        return flask.Response(generate_latest(self._registry), content_type=CONTENT_TYPE_LATEST)
 
     def is_blueprint_protected(self):
-        # Scraped by Prometheus over the in-cluster Connect mesh, which has no
-        # way to present an OctoPrint API key.
+        # Prometheus scrapers have no way to present an OctoPrint API key, so
+        # this endpoint is open. Keep it on a trusted network.
         return False
 
     def is_blueprint_csrf_protected(self):
