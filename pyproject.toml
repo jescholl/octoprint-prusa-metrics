@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "octoprint-prusa-metrics"
+# Static rather than setuptools-scm: the plugin is installed from a GitHub tag
+# archive, which carries no git metadata for scm to read. Bump alongside the tag.
+version = "0.1.0"
+description = "Prometheus metrics and firmware-version reporting for OctoPrint"
+readme = "README.md"
+requires-python = ">=3.7"
+license = { text = "AGPL-3.0-or-later" }
+authors = [{ name = "Jason Scholl" }]
+dependencies = ["prometheus-client>=0.20.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "bandit>=1.7"]
+
+[project.entry-points."octoprint.plugin"]
+# The entry point name is the OctoPrint plugin identifier, which is what the
+# blueprint URL is built from: /plugin/prusa_metrics/metrics
+# It targets the submodule rather than the package so that __init__.py can stay
+# empty, keeping parsing/collector importable without flask or OctoPrint present.
+prusa_metrics = "octoprint_prusa_metrics.plugin"
+
+[tool.setuptools.packages.find]
+include = ["octoprint_prusa_metrics*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
