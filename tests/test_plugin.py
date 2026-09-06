@@ -8,9 +8,24 @@ import logging
 
 import pytest
 from octoprint.events import Events
+from prometheus_client import CollectorRegistry, generate_latest
 
 from octoprint_prusa_metrics import plugin as plugin_module
+from octoprint_prusa_metrics.collector import build_metrics
 from octoprint_prusa_metrics.plugin import PrusaMetricsPlugin
+
+
+def render_snapshot(snapshot):
+    """Render a snapshot through the real collector, as a scrape would."""
+    registry = CollectorRegistry()
+
+    class _Collector:
+        def collect(self):
+            return build_metrics(snapshot)
+
+    registry.register(_Collector())
+    return generate_latest(registry).decode()
+
 
 PRUSA_M115 = (
     "FIRMWARE_NAME:Prusa-Firmware 3.14.1 based on Marlin "
@@ -96,6 +111,82 @@ class TestFirmwareCapture:
 
     def test_mmu_absent_before_init_exchange(self, plugin):
         assert plugin.build_snapshot()["mmu"] is None
+
+
+class TestWithoutMmu:
+    """A printer with no MMU, or one that is powered off/disconnected, must
+    degrade to 'no MMU metric' rather than erroring anywhere."""
+
+    # A plain MK3S reports one extruder and no PRUSA_MMU2 capability.
+    NON_MMU_M115 = (
+        "FIRMWARE_NAME:Prusa-Firmware 3.14.1 based on Marlin "
+        "PROTOCOL_VERSION:1.0 MACHINE_TYPE:Prusa i3 MK3S EXTRUDER_COUNT:1"
+    )
+
+    @pytest.fixture
+    def no_mmu_plugin(self):
+        instance = PrusaMetricsPlugin()
+        instance._logger = logging.getLogger("test")
+        instance._printer = FakePrinter(
+            data={"state": {"text": "Operational", "flags": {"operational": True}}},
+            # Single tool, no MMU slots.
+            temperatures={
+                "tool0": {"actual": 21.0, "target": 0.0},
+                "bed": {"actual": 20.0, "target": 0.0},
+            },
+        )
+        return instance
+
+    def test_no_mmu_traffic_yields_no_mmu_metric_and_no_error(self, no_mmu_plugin):
+        no_mmu_plugin.on_gcode_received(None, self.NON_MMU_M115)
+        snapshot = no_mmu_plugin.build_snapshot()
+        assert snapshot["mmu"] is None
+        output = render_snapshot(snapshot)
+        assert "octoprint_printer_mmu_info" not in output
+        # Everything else still reports.
+        assert 'firmware_version="3.14.1"' in output
+        assert 'octoprint_temperature_actual_celsius{sensor="tool0"} 21.0' in output
+        assert 'octoprint_printer_state{state="Operational"} 1.0' in output
+
+    def test_mmu_erroring_does_not_produce_a_version(self, no_mmu_plugin):
+        # An MMU that is present but faulted answers the state poll with an
+        # error and never completes the S0-S3 version exchange.
+        for line in (
+            "echo:MMU2:<X0 E8008*1b.",
+            "echo:MMU2:Command Error, last bytes: 00 00 58",
+            "echo:MMU2:<R8 A1*98.",
+        ):
+            no_mmu_plugin.on_gcode_received(None, line)
+        snapshot = no_mmu_plugin.build_snapshot()
+        assert snapshot["mmu"] is None
+        assert "octoprint_printer_mmu_info" not in render_snapshot(snapshot)
+
+    def test_partial_version_exchange_is_not_reported(self, no_mmu_plugin):
+        # MMU powered off midway: some replies arrive, the rest never do.
+        no_mmu_plugin.on_gcode_received(None, "echo:MMU2:<S0 A3*22.")
+        no_mmu_plugin.on_gcode_received(None, "echo:MMU2:<S1 A0*34.")
+        assert no_mmu_plugin.build_snapshot()["mmu"] is None
+
+    def test_mmu_named_gcode_file_is_not_mistaken_for_a_version(self, no_mmu_plugin):
+        # Real filenames on this printer embed "MMU3"; the M20 listing must not
+        # be parsed as MMU protocol traffic.
+        no_mmu_plugin.on_gcode_received(
+            None, 'CUPHOL~1.GCO 10487787 0x50d94ec7 "cupholder_MK3SMMU3_7h56m.gcode"'
+        )
+        assert no_mmu_plugin.build_snapshot()["mmu"] is None
+
+    def test_full_render_is_stable_with_no_mmu(self, no_mmu_plugin):
+        # The whole exposition must render cleanly start to finish.
+        output = render_snapshot(no_mmu_plugin.build_snapshot())
+        for expected in (
+            "octoprint_info",
+            "octoprint_printer_flag",
+            "octoprint_temperature_actual_celsius",
+            "octoprint_prints_total",
+            "octoprint_travel_mm_total",
+            "octoprint_timelapse_captures_total",
+        ):
+            assert expected in output
 
 
 class TestGcodeSent:
