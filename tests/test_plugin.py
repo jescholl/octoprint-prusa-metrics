@@ -142,7 +142,7 @@ class TestWithoutMmu:
         snapshot = no_mmu_plugin.build_snapshot()
         assert snapshot["mmu"] is None
         output = render_snapshot(snapshot)
-        assert "octoprint_printer_mmu_info" not in output
+        assert "octoprint_mmu_" not in output
         # Everything else still reports.
         assert 'firmware_version="3.14.1"' in output
         assert 'octoprint_temperature_actual_celsius{sensor="tool0"} 21.0' in output
@@ -159,7 +159,7 @@ class TestWithoutMmu:
             no_mmu_plugin.on_gcode_received(None, line)
         snapshot = no_mmu_plugin.build_snapshot()
         assert snapshot["mmu"] is None
-        assert "octoprint_printer_mmu_info" not in render_snapshot(snapshot)
+        assert "octoprint_mmu_info" not in render_snapshot(snapshot)
 
     def test_partial_version_exchange_is_not_reported(self, no_mmu_plugin):
         # MMU powered off midway: some replies arrive, the rest never do.

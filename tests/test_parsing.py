@@ -1,10 +1,11 @@
 from octoprint_prusa_metrics.parsing import (
     ExtrusionTracker,
-    MmuVersionTracker,
+    MmuTracker,
     MovementTracker,
     extract_version,
     firmware_labels,
     parse_fan_speed,
+    parse_heater_pwm,
     parse_m115,
     strip_gcode_comment,
 )
@@ -83,7 +84,7 @@ class TestFirmwareLabels:
         assert labels["extruder_count"] == "1"
 
 
-class TestMmuVersionTracker:
+class TestMmuTracker:
     # Captured verbatim from the MK3S+/MMU3 serial stream. Values are hex:
     # S3 A380 -> 0x380 -> build 896, which matches the firmware on the unit.
     REAL_EXCHANGE = [
@@ -94,44 +95,147 @@ class TestMmuVersionTracker:
     ]
 
     def test_reassembles_real_printer_version(self):
-        t = MmuVersionTracker()
+        t = MmuTracker()
         for line in self.REAL_EXCHANGE:
             t.feed(line)
         assert t.version == "3.0.3"
         assert t.build == "896"
-        assert t.labels == {"mmu_version": "3.0.3", "mmu_build": "896"}
+        assert t.version_labels == {"mmu_version": "3.0.3", "mmu_build": "896"}
 
     def test_build_is_parsed_as_hex_not_decimal(self):
-        t = MmuVersionTracker()
+        t = MmuTracker()
         t.feed("echo:MMU2:<S3 A380*d9.")
         assert t.build == "896"
 
     def test_version_unknown_until_all_parts_arrive(self):
-        t = MmuVersionTracker()
+        t = MmuTracker()
         t.feed("echo:MMU2:<S0 A3*22.")
         t.feed("echo:MMU2:<S1 A0*34.")
         assert t.version is None
-        assert t.labels is None
+        assert t.version_labels is None
         t.feed("echo:MMU2:<S2 A3*70.")
         assert t.version == "3.0.3"
 
     def test_version_available_without_build(self):
-        t = MmuVersionTracker()
+        t = MmuTracker()
         for line in self.REAL_EXCHANGE[:3]:
             t.feed(line)
-        assert t.labels == {"mmu_version": "3.0.3", "mmu_build": ""}
+        assert t.version_labels == {"mmu_version": "3.0.3", "mmu_build": ""}
 
     def test_ignores_other_mmu_traffic(self):
-        t = MmuVersionTracker()
+        t = MmuTracker()
         # Ordinary polling and the error state seen during the 04506 fault.
         for line in ("echo:MMU2:<X0 E8008*1b.", "echo:MMU2:<R8 A1*98.", "ok", ""):
             t.feed(line)
         assert t.version is None
 
     def test_handles_none(self):
-        t = MmuVersionTracker()
+        t = MmuTracker()
         t.feed(None)
         assert t.version is None
+
+
+class TestMmuLiveState:
+    """All input here is verbatim from the MK3S+/MMU3 serial capture taken
+    during a real 04506 fault and after it was cleared."""
+
+    FAULT_CYCLE = [
+        "echo:MMU2:<X0 E8008*1b.",
+        "echo:MMU2:<R8 A1*98.",
+        "echo:MMU2:<R1b Aff*bf.",
+        "echo:MMU2:<R1c Aff*60.",
+        "echo:MMU2:<R4 A0*66.",
+        "echo:MMU2:<R1a A0*41.",
+    ]
+
+    def feed_all(self, lines):
+        t = MmuTracker()
+        for line in lines:
+            t.feed(line)
+        return t
+
+    def test_registers_captured_by_name(self):
+        t = self.feed_all(self.FAULT_CYCLE)
+        assert t.named_registers == {
+            "finda": 1,
+            "selector_slot": 0xFF,
+            "idler_slot": 0xFF,
+            "errors": 0,
+            "pulley_position": 0,
+        }
+
+    def test_finda_matches_the_lcd_during_the_real_fault(self):
+        # The printer's LCD showed "FI:1" at this moment.
+        assert self.feed_all(self.FAULT_CYCLE).named_registers["finda"] == 1
+
+    def test_error_code_maps_to_lcd_code_and_url(self):
+        t = self.feed_all(self.FAULT_CYCLE)
+        assert t.error_code == 0x8008
+        assert t.error_labels == {
+            "code": "0x8008",
+            "lcd_code": "04506",
+            "url": "https://prusa.io/04506",
+        }
+
+    def test_unmapped_error_still_reports_raw_code(self):
+        t = MmuTracker()
+        t.feed("echo:MMU2:<X0 Edef*aa.")
+        assert t.error_labels["code"] == "0x0def"
+        assert t.error_labels["lcd_code"] == ""
+        assert t.error_labels["url"] == ""
+
+    def test_healthy_registers_after_the_fault_cleared(self):
+        # Post-fix the slot registers read 5 (parked) instead of 0xff.
+        t = self.feed_all(["echo:MMU2:<R1b A5*29.", "echo:MMU2:<R1c A5*f6."])
+        assert t.named_registers["selector_slot"] == 5
+        assert t.named_registers["idler_slot"] == 5
+
+    def test_progress_code_is_named(self):
+        t = MmuTracker()
+        t.feed("echo:MMU2:<T0 P1a*3f.")
+        assert t.progress_labels == {"code": "26", "name": "Homing"}
+
+    def test_progress_clears_a_previous_error(self):
+        t = self.feed_all(self.FAULT_CYCLE)
+        assert t.error_code == 0x8008
+        t.feed("echo:MMU2:<T0 P5*aa.")
+        assert t.error_code is None
+        assert t.progress_labels["name"] == "FeedingToFinda"
+
+    def test_finished_clears_error_and_progress(self):
+        t = self.feed_all(self.FAULT_CYCLE)
+        t.feed("echo:MMU2:<T0 F0*aa.")
+        assert t.error_code is None
+        assert t.progress_code is None
+        assert t.error_labels is None
+
+    def test_seen_flag_distinguishes_no_mmu_from_healthy_mmu(self):
+        assert MmuTracker().seen is False
+        assert self.feed_all(self.FAULT_CYCLE).seen is True
+
+    def test_rejected_command_is_not_an_error_code(self):
+        # The U0 rejection loop must not be reported as an MMU error.
+        t = MmuTracker()
+        t.feed("echo:MMU2:<U0 R*ce.")
+        assert t.error_code is None
+        assert t.error_labels is None
+
+
+class TestParseHeaterPwm:
+    # Verbatim temperature line from the printer.
+    REAL_LINE = "T:18.0 /0.0 B:17.9 /0.0 T0:18.0 /0.0 @:0 B@:0 P:0.0 A:26.4"
+
+    def test_parses_both_heaters(self):
+        assert parse_heater_pwm(self.REAL_LINE) == {"tool": 0.0, "bed": 0.0}
+
+    def test_bed_pwm_is_not_confused_with_hotend(self):
+        pwm = parse_heater_pwm("T:210 /210 B:60 /60 @:127 B@:64")
+        assert pwm == {"tool": 127.0, "bed": 64.0}
+
+    def test_line_without_pwm_yields_nothing(self):
+        assert parse_heater_pwm("T:210.0 /210.0 B:60.0 /60.0") == {}
+        assert parse_heater_pwm("") == {}
+        assert parse_heater_pwm(None) == {}
 
 
 class TestStripGcodeComment:

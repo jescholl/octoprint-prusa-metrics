@@ -22,7 +22,9 @@ publicly.
 | --- | --- | --- |
 | `octoprint_info` | gauge | OctoPrint/plugin/Python versions, hostname, OS |
 | `octoprint_printer_firmware_info` | gauge | Firmware name/version, machine type, extruder count |
-| `octoprint_printer_mmu_info` | gauge | MMU firmware version + build, on MMU-equipped printers |
+| `octoprint_heater_pwm{heater}` | gauge | Heater duty cycle, `tool`/`bed` |
+| `octoprint_position_mm{axis}` | gauge | Current commanded position |
+| `octoprint_job_filament_estimate_mm` | gauge | Slicer's filament estimate for the job |
 | `octoprint_printer_flag{flag}` | gauge | `operational`, `printing`, `paused`, `error`, … |
 | `octoprint_printer_state{state}` | gauge | Current state as a label |
 | `octoprint_temperature_actual_celsius{sensor}` | gauge | Per tool and bed |
@@ -45,6 +47,33 @@ publicly.
 | `octoprint_last_print_time_seconds` | gauge | Duration of last finished print |
 | `octoprint_last_print_extrusion_mm` | gauge | Filament used by last finished print |
 | `octoprint_last_print_travel_mm{axis}` | gauge | Axis travel of last finished print |
+
+### MMU metrics (Prusa MMU only)
+
+Every metric below is **absent entirely** on printers without an MMU, and on an
+MMU that is powered off or unreachable. Nothing here is required for the rest of
+the exposition to render.
+
+| Metric | Type | Notes |
+| --- | --- | --- |
+| `octoprint_mmu_info` | gauge | MMU firmware version and build |
+| `octoprint_mmu_finda` | gauge | FINDA filament sensor in the selector, 0/1 |
+| `octoprint_mmu_selector_slot` | gauge | Slot the selector is on (`5` = parked) |
+| `octoprint_mmu_idler_slot` | gauge | Slot the idler is engaged with |
+| `octoprint_mmu_pulley_position` | gauge | Pulley position |
+| `octoprint_mmu_errors_total` | counter | Errors recorded by the MMU itself |
+| `octoprint_mmu_error{code,lcd_code,url}` | gauge | Current error; `url` links to Prusa's page for the code |
+| `octoprint_mmu_progress{code,name}` | gauge | What the MMU is doing, e.g. `FeedingToFinda` |
+
+All of this is read passively from the request/response chatter the printer
+already exchanges with the MMU about once a second — the plugin never sends a
+command to obtain it.
+
+The **extruder** filament sensor (`FS` on the printer's LCD) is deliberately
+**not** collected: the printer does not report it continuously, and reading MMU
+register `0x09` would mean sending commands. FINDA and the extruder sensor
+bracket the filament path, so having only FINDA means you can detect filament in
+the selector but not localise a blockage between the two.
 
 Counters reset when OctoPrint restarts; use `rate()`/`increase()`.
 
@@ -74,12 +103,25 @@ names into metrics.
   emits linear moves. Homing resets the origin without being attributed any
   travel, since the distance covered is indeterminate.
 
+## Portability
+
+The core metrics are firmware-agnostic and work on any Marlin-derived printer:
+temperatures, heater PWM, state, job progress, print counters, travel,
+extrusion, fan speed, position, and `M115` firmware info.
+
+Printer-specific signals are strictly additive:
+
+- **MMU metrics** appear only when MMU protocol traffic is observed.
+- **Temperature sensors are enumerated, not hardcoded**, so a Prusa's ambient
+  (`A`) and PINDA (`P`) sensors and all five MMU tool slots are picked up
+  automatically, while a single-extruder printer simply reports fewer series.
+
 ## Install
 
 Install from a pinned tag archive:
 
 ```
-pip install https://github.com/jescholl/octoprint-prusa-metrics/archive/refs/tags/v0.1.0.zip
+pip install https://github.com/jescholl/octoprint-prusa-metrics/archive/refs/tags/v0.4.0.zip
 ```
 
 Inside the official `octoprint/octoprint` image, `PIP_USER=true` and

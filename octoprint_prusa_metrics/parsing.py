@@ -12,10 +12,18 @@ _M115_KEY_RE = re.compile(r"\b(?P<key>[A-Z][A-Z0-9_]*):")
 # "3.14.1+8237", which is neither a clean version nor the full build id.
 _VERSION_RE = re.compile(r"(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z._]+)?)")
 
-# The printer queries the MMU's firmware version once during MMU init, as four
-# separate protocol reads S0-S3 (major/minor/revision/build). Responses look
-# like ``echo:MMU2:<S3 A380*d9.`` and the value is HEX -- 0x380 is build 896.
-_MMU_VERSION_RE = re.compile(r"MMU\d*:<S(?P<index>[0-3])\s+A(?P<value>[0-9a-fA-F]+)")
+# MMU protocol responses are "<{command}{param} {status}{value}", e.g.
+# ``<R8 A1`` (read register 8, Accepted, value 1) or ``<X0 E8008`` (command X0,
+# Error, code 0x8008). All numbers are HEX -- 0x380 is build 896.
+_MMU_RESPONSE_RE = re.compile(
+    r"MMU\d*:<(?P<command>[A-Z])(?P<param>[0-9a-fA-F]*)\s+"
+    r"(?P<status>[A-Z])(?P<value>[0-9a-fA-F]*)"
+)
+
+# Heater PWM duty, reported in every temperature line as "@:0 B@:0". The hotend
+# pattern must not match the bed's "B@:", hence the lookbehind.
+_HOTEND_PWM_RE = re.compile(r"(?<![A-Za-z])@:(\d+)")
+_BED_PWM_RE = re.compile(r"\bB@:(\d+)")
 
 _FAN_SET_RE = re.compile(r"^M106\b")
 _FAN_OFF_RE = re.compile(r"^M107\b")
@@ -77,28 +85,131 @@ def firmware_labels(fields):
     }
 
 
-class MmuVersionTracker:
-    """Reassembles the MMU firmware version from the S0-S3 protocol reads.
+# Registers the printer polls continuously, so their values arrive for free.
+# Addresses from Prusa-Firmware Firmware/mmu2/registers.h.
+MMU_REGISTERS = {
+    0x04: "errors",
+    0x08: "finda",
+    0x1A: "pulley_position",
+    0x1B: "selector_slot",
+    0x1C: "idler_slot",
+}
 
-    The printer issues these once per MMU initialisation, so the version only
-    becomes known after an MMU startup observed while OctoPrint is connected --
-    the same constraint that applies to the printer's own M115 response.
+# Protocol ErrorCode -> the 3-digit code shown on the LCD, which also forms the
+# support URL (506 -> prusa.io/04506). Derived from Prusa-Firmware's
+# mmu2_error_converter.cpp; the TMC-driver bitfield errors are deliberately
+# omitted since they are computed from bit combinations rather than a lookup.
+MMU_ERROR_LCD_CODES = {
+    0x8001: 101,  # FINDA didn't trigger
+    0x8002: 102,  # FINDA: filament stuck
+    0x8003: 103,  # FSensor didn't trigger
+    0x8004: 104,  # FSensor: filament stuck
+    0x8005: 501,  # filament already loaded
+    0x8006: 502,  # invalid tool
+    0x8008: 506,  # FINDA vs EEPROM discrepancy -- "unload manually"
+    0x8009: 106,  # FSensor triggered too early
+    0x800A: 107,  # FINDA flickers -- inspect it
+    0x800C: 507,  # filament ejected
+    0x800D: 306,  # MMU MCU undervoltage
+    0x802A: 108,  # load to extruder failed
+    0x802B: 503,  # queue full
+    0x802C: 504,  # firmware update needed
+    0x802D: 402,  # protocol/communication error
+    0x802E: 401,  # MMU not responding
+    0x802F: 505,  # firmware runtime error
+}
+
+# From Prusa-Firmware-MMU src/logic/progress_codes.h.
+MMU_PROGRESS_CODES = {
+    0: "OK",
+    1: "EngagingIdler",
+    2: "DisengagingIdler",
+    3: "UnloadingToFinda",
+    4: "UnloadingToPulley",
+    5: "FeedingToFinda",
+    6: "FeedingToExtruder",
+    7: "FeedingToNozzle",
+    8: "AvoidingGrind",
+    9: "FinishingMoves",
+    10: "ERRDisengagingIdler",
+    11: "ERREngagingIdler",
+    12: "ERRWaitingForUser",
+    13: "ERRInternal",
+    14: "ERRHelpingFilament",
+    15: "ERRTMCFailed",
+    16: "UnloadingFilament",
+    17: "LoadingFilament",
+    18: "SelectingFilamentSlot",
+    19: "PreparingBlade",
+    20: "PushingFilament",
+    21: "PerformingCut",
+    22: "ReturningSelector",
+    23: "ParkingSelector",
+    24: "EjectingFilament",
+    25: "RetractingFromFinda",
+    26: "Homing",
+    27: "MovingSelector",
+    28: "FeedingToFSensor",
+    0xFF: "Empty",
+}
+
+
+def mmu_error_url(lcd_code):
+    """Support URL for an LCD error code, e.g. 506 -> https://prusa.io/04506."""
+    return f"https://prusa.io/04{lcd_code:03d}"
+
+
+class MmuTracker:
+    """Tracks MMU state from the protocol chatter the printer already emits.
+
+    Everything here is passive: the printer polls the MMU roughly once a second
+    and those request/response pairs stream past on the serial line, so no
+    command is ever sent to obtain any of it.
 
     Verified against a real MK3S+/MMU3: S0=3, S1=0, S2=3, S3=0x380 reassembles
-    to 3.0.3 build 896, matching the firmware actually flashed to the unit.
+    to 3.0.3 build 896, and register 0x08 tracked the FINDA state shown on the
+    printer's own LCD during a real 04506 fault.
     """
 
     MAJOR, MINOR, REVISION, BUILD = 0, 1, 2, 3
 
     def __init__(self):
         self._parts = {}
+        self.registers = {}
+        self.error_code = None
+        self.progress_code = None
+        self.seen = False
 
     def feed(self, line):
         if not line:
             return
-        match = _MMU_VERSION_RE.search(line)
-        if match:
-            self._parts[int(match.group("index"))] = int(match.group("value"), 16)
+        match = _MMU_RESPONSE_RE.search(line)
+        if not match:
+            return
+
+        self.seen = True
+        command = match.group("command")
+        status = match.group("status")
+        raw_param = match.group("param")
+        raw_value = match.group("value")
+        value = int(raw_value, 16) if raw_value else None
+
+        if status == "A" and command == "R" and raw_param:
+            self.registers[int(raw_param, 16)] = value
+        elif status == "A" and command == "S" and raw_param is not None:
+            self._parts[int(raw_param, 16)] = value
+        elif status == "E":
+            self.error_code = value
+            self.progress_code = None
+        elif status == "P":
+            self.progress_code = value
+            self.error_code = None
+        elif status == "F":
+            # Command finished cleanly, so any previous error is resolved.
+            self.error_code = None
+            self.progress_code = None
+
+    # ~~ Firmware version
 
     @property
     def version(self):
@@ -114,12 +225,63 @@ class MmuVersionTracker:
         return str(build) if build is not None else None
 
     @property
-    def labels(self):
+    def version_labels(self):
         """Label set for the info metric, or None if the version is unknown."""
         version = self.version
         if version is None:
             return None
         return {"mmu_version": version, "mmu_build": self.build or ""}
+
+    # ~~ Live state
+
+    @property
+    def named_registers(self):
+        """Polled registers keyed by name, skipping any not yet seen."""
+        return {
+            name: self.registers[address]
+            for address, name in MMU_REGISTERS.items()
+            if address in self.registers
+        }
+
+    @property
+    def error_labels(self):
+        """Labels describing the current error, or None when there is none."""
+        if self.error_code is None:
+            return None
+        lcd_code = MMU_ERROR_LCD_CODES.get(self.error_code)
+        return {
+            "code": f"0x{self.error_code:04x}",
+            "lcd_code": f"04{lcd_code:03d}" if lcd_code else "",
+            "url": mmu_error_url(lcd_code) if lcd_code else "",
+        }
+
+    @property
+    def progress_labels(self):
+        """Labels describing what the MMU is currently doing, or None."""
+        if self.progress_code is None:
+            return None
+        return {
+            "code": str(self.progress_code),
+            "name": MMU_PROGRESS_CODES.get(self.progress_code, "Unknown"),
+        }
+
+
+def parse_heater_pwm(line):
+    """Extract heater PWM duty from a temperature report line.
+
+    Marlin reports these as ``@:`` (hotend) and ``B@:`` (bed); OctoPrint's own
+    temperature API drops them, so they are read straight off the wire.
+    """
+    if not line:
+        return {}
+    pwm = {}
+    hotend = _HOTEND_PWM_RE.search(line)
+    if hotend:
+        pwm["tool"] = float(hotend.group(1))
+    bed = _BED_PWM_RE.search(line)
+    if bed:
+        pwm["bed"] = float(bed.group(1))
+    return pwm
 
 
 class ExtrusionTracker:
@@ -189,6 +351,11 @@ class MovementTracker:
         self.relative = relative
         self.totals = dict.fromkeys(self.AXES, 0.0)
         self._pos = dict.fromkeys(self.AXES, 0.0)
+
+    @property
+    def position(self):
+        """Current commanded position per axis, relative to the last origin."""
+        return dict(self._pos)
 
     def feed(self, raw_line):
         line = strip_gcode_comment(raw_line).upper()

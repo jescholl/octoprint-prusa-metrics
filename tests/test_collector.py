@@ -14,6 +14,23 @@ def snapshot():
             "machine_type": "Prusa i3 MK3S",
         },
         "mmu": {"mmu_version": "3.0.3", "mmu_build": "896"},
+        "mmu_seen": True,
+        "mmu_registers": {
+            "finda": 1,
+            "selector_slot": 2,
+            "idler_slot": 2,
+            "pulley_position": 17,
+            "errors": 3,
+        },
+        "mmu_error": {
+            "code": "0x8008",
+            "lcd_code": "04506",
+            "url": "https://prusa.io/04506",
+        },
+        "mmu_progress": {"code": "5", "name": "FeedingToFinda"},
+        "heater_pwm": {"tool": 127.0, "bed": 64.0},
+        "position": {"X": 100.0, "Y": 50.0, "Z": 0.2},
+        "job_filament_mm": 8500.0,
         "flags": {"operational": True, "printing": True, "error": False},
         "state_text": "Printing",
         "temperatures": {
@@ -39,6 +56,19 @@ def snapshot():
         "current_print": {"extrusion": 120.0, "X": 900.0, "Y": 800.0, "Z": 40.0},
         "last_print": {"extrusion": 400.0, "X": 2000.0, "Y": 1800.0, "Z": 90.0},
     }
+
+
+def has_metric(output, name):
+    """True if a real sample line for the metric exists.
+
+    Line-anchored on purpose: a bare substring check also matches metric
+    names mentioned inside another metric's HELP text.
+    """
+    return any(
+        line.split("{")[0].split(" ")[0] == name
+        for line in output.splitlines()
+        if not line.startswith("#")
+    )
 
 
 def render(snapshot):
@@ -68,7 +98,7 @@ class TestExposition:
 
     def test_mmu_info_omitted_when_unknown(self, snapshot):
         snapshot["mmu"] = None
-        assert "octoprint_printer_mmu_info" not in render(snapshot)
+        assert "octoprint_mmu_info" not in render(snapshot)
 
     def test_temperatures_per_sensor(self, snapshot):
         output = render(snapshot)
@@ -139,8 +169,8 @@ class TestExposition:
     def test_live_per_print_figures_withdrawn_between_prints(self, snapshot):
         snapshot["current_print"] = None
         output = render(snapshot)
-        assert "octoprint_print_extrusion_mm" not in output
-        assert "octoprint_print_travel_mm" not in output
+        assert not has_metric(output, "octoprint_print_extrusion_mm")
+        assert not has_metric(output, "octoprint_print_travel_mm")
         # The frozen set from the previous print remains.
         assert "octoprint_last_print_extrusion_mm 400.0" in output
 
@@ -154,3 +184,61 @@ class TestExposition:
         output = render(snapshot)
         assert "path=" not in output
         assert "filename=" not in output
+
+
+class TestNewSignals:
+    def test_finda_and_slots(self, snapshot):
+        output = render(snapshot)
+        assert "octoprint_mmu_finda 1.0" in output
+        assert "octoprint_mmu_selector_slot 2.0" in output
+        assert "octoprint_mmu_idler_slot 2.0" in output
+
+    def test_mmu_error_carries_code_and_support_url(self, snapshot):
+        output = render(snapshot)
+        assert 'lcd_code="04506"' in output
+        assert 'url="https://prusa.io/04506"' in output
+
+    def test_mmu_error_series_present_but_unset_when_healthy(self, snapshot):
+        snapshot["mmu_error"] = None
+        output = render(snapshot)
+        # The family still exists so alerts have something to match on.
+        assert "octoprint_mmu_error" in output
+        assert 'lcd_code="04506"' not in output
+
+    def test_mmu_progress_named(self, snapshot):
+        assert 'name="FeedingToFinda"' in render(snapshot)
+
+    def test_mmu_error_counter(self, snapshot):
+        assert "octoprint_mmu_errors_total 3.0" in render(snapshot)
+
+    def test_heater_pwm(self, snapshot):
+        output = render(snapshot)
+        assert 'octoprint_heater_pwm{heater="tool"} 127.0' in output
+        assert 'octoprint_heater_pwm{heater="bed"} 64.0' in output
+
+    def test_position(self, snapshot):
+        output = render(snapshot)
+        assert 'octoprint_position_mm{axis="x"} 100.0' in output
+        assert 'octoprint_position_mm{axis="z"} 0.2' in output
+
+    def test_job_filament_estimate(self, snapshot):
+        assert "octoprint_job_filament_estimate_mm 8500.0" in render(snapshot)
+
+    def test_no_mmu_family_at_all_without_an_mmu(self, snapshot):
+        # The single most important portability guarantee.
+        snapshot["mmu_seen"] = False
+        output = render(snapshot)
+        assert "octoprint_mmu" not in output
+        # Non-MMU signals are unaffected.
+        assert "octoprint_heater_pwm" in output
+        assert "octoprint_temperature_actual_celsius" in output
+
+    def test_optional_signals_omitted_when_absent(self):
+        output = render({"prints": {}, "flags": {}})
+        for absent in (
+            "octoprint_heater_pwm",
+            "octoprint_position_mm",
+            "octoprint_job_filament_estimate_mm",
+            "octoprint_mmu",
+        ):
+            assert absent not in output

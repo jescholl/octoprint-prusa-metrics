@@ -17,10 +17,11 @@ from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_l
 from .collector import build_metrics
 from .parsing import (
     ExtrusionTracker,
-    MmuVersionTracker,
+    MmuTracker,
     MovementTracker,
     firmware_labels,
     parse_fan_speed,
+    parse_heater_pwm,
     parse_m115,
 )
 
@@ -49,7 +50,8 @@ class PrusaMetricsPlugin(
         self._lock = threading.RLock()
         self._registry = CollectorRegistry()
         self._firmware = None
-        self._mmu = MmuVersionTracker()
+        self._mmu = MmuTracker()
+        self._heater_pwm = {}
         self._clients = 0
         self._fan_speed = 0.0
         self._extrusion = ExtrusionTracker()
@@ -109,6 +111,13 @@ class PrusaMetricsPlugin(
         if "MMU" in line:
             with self._lock:
                 self._mmu.feed(line)
+
+        # Heater PWM rides along in every temperature report.
+        if "@:" in line:
+            pwm = parse_heater_pwm(line)
+            if pwm:
+                with self._lock:
+                    self._heater_pwm = pwm
 
         return line
 
@@ -208,7 +217,14 @@ class PrusaMetricsPlugin(
                     "os": platform.system(),
                 },
                 "firmware": dict(self._firmware) if self._firmware else None,
-                "mmu": self._mmu.labels,
+                "mmu": self._mmu.version_labels,
+                "mmu_registers": self._mmu.named_registers,
+                "mmu_error": self._mmu.error_labels,
+                "mmu_progress": self._mmu.progress_labels,
+                "mmu_seen": self._mmu.seen,
+                "heater_pwm": dict(self._heater_pwm),
+                "position": self._movement.position,
+                "job_filament_mm": _job_filament_mm(job),
                 "flags": dict(state.get("flags") or {}),
                 "state_text": state.get("text"),
                 "temperatures": _clean_temperatures(temperatures),
@@ -233,6 +249,20 @@ class PrusaMetricsPlugin(
                 "current_print": self._since_baseline() if self._printing else None,
                 "last_print": dict(self._last_print_totals) if self._last_print_totals else None,
             }
+
+
+def _job_filament_mm(job):
+    """Total estimated filament for the current job, summed across tools."""
+    filament = (job or {}).get("filament")
+    if not isinstance(filament, dict):
+        return None
+    total = 0.0
+    found = False
+    for entry in filament.values():
+        if isinstance(entry, dict) and entry.get("length") is not None:
+            total += entry["length"]
+            found = True
+    return total if found else None
 
 
 def _clean_temperatures(temperatures):

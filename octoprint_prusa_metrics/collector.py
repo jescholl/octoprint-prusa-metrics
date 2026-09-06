@@ -66,16 +66,80 @@ def _build_info(snapshot):
         family.add_metric([str(v) for v in firmware.values()], 1)
         yield family
 
+    yield from _build_mmu(snapshot)
+
+
+def _build_mmu(snapshot):
+    """MMU metrics. Entirely absent on printers without an MMU -- nothing here
+    is required for the rest of the exposition to render."""
+    # No MMU chatter ever observed means no MMU (or it is unpowered), so emit
+    # nothing at all rather than a family full of empty labels.
+    if not snapshot.get("mmu_seen"):
+        return
+
     mmu = snapshot.get("mmu")
     if mmu:
         family = GaugeMetricFamily(
-            f"{PREFIX}_printer_mmu_info",
+            f"{PREFIX}_mmu_info",
             "MMU firmware version, reassembled from the S0-S3 protocol reads the "
             "printer issues during MMU initialisation.",
             labels=list(mmu.keys()),
         )
         family.add_metric([str(v) for v in mmu.values()], 1)
         yield family
+
+    registers = snapshot.get("mmu_registers") or {}
+
+    # FINDA is the filament sensor in the MMU selector. Paired with the
+    # extruder's own sensor it brackets the filament path, which is how a
+    # blockage between the two gets localised.
+    if "finda" in registers:
+        yield _gauge(
+            "mmu_finda",
+            "MMU FINDA filament sensor: 1 when filament is detected in the selector.",
+            1 if registers["finda"] else 0,
+        )
+
+    for name, documentation in (
+        ("selector_slot", "Filament slot the MMU selector is currently on."),
+        ("idler_slot", "Filament slot the MMU idler is currently engaged with."),
+        ("pulley_position", "MMU pulley position."),
+    ):
+        if name in registers:
+            yield _gauge(f"mmu_{name}", documentation, registers[name])
+
+    if "errors" in registers:
+        yield CounterMetricFamily(
+            f"{PREFIX}_mmu_errors",
+            "Errors recorded by the MMU itself, as reported by register 0x04.",
+            value=registers["errors"],
+        )
+
+    error = snapshot.get("mmu_error")
+    yield _labelled_state(
+        "mmu_error",
+        "Current MMU error. Absent when the MMU is not in an error state; the "
+        "url label points at Prusa's page for the code.",
+        error,
+        ["code", "lcd_code", "url"],
+    )
+
+    progress = snapshot.get("mmu_progress")
+    yield _labelled_state(
+        "mmu_progress",
+        "What the MMU is currently doing, as a progress code and its name.",
+        progress,
+        ["code", "name"],
+    )
+
+
+def _labelled_state(name, documentation, labels, label_names):
+    """A 0/1 gauge carrying label detail, emitted as 0 with empty labels when
+    the state is absent so the series exists for alerting either way."""
+    family = GaugeMetricFamily(f"{PREFIX}_{name}", documentation, labels=label_names)
+    if labels:
+        family.add_metric([str(labels.get(n, "")) for n in label_names], 1)
+    return family
 
 
 def _build_state(snapshot):
@@ -146,6 +210,20 @@ def _build_temperatures(snapshot):
     yield actual
     yield target
 
+    # Heater duty cycle, read off the temperature line. A hotend working much
+    # harder than usual to hold temperature is an early sign of a failing
+    # heater, a draft, or a drifting thermistor.
+    pwm = snapshot.get("heater_pwm") or {}
+    if pwm:
+        family = GaugeMetricFamily(
+            f"{PREFIX}_heater_pwm",
+            "Heater PWM duty as reported by the firmware (Marlin scale, 0-127).",
+            labels=["heater"],
+        )
+        for heater, value in sorted(pwm.items()):
+            family.add_metric([heater], value)
+        yield family
+
 
 def _build_job(snapshot):
     job = snapshot.get("job") or {}
@@ -176,6 +254,28 @@ def _build_job(snapshot):
             "Sliced estimate of total print time for the current job.",
             job["estimated"],
         )
+
+    filament = snapshot.get("job_filament_mm")
+    if filament is not None:
+        yield _gauge(
+            "job_filament_estimate_mm",
+            "Filament the slicer estimates this job needs, summed across tools. "
+            "Compare against octoprint_print_extrusion_mm for actual usage.",
+            filament,
+        )
+
+    # Commanded position, tracked from the gcode stream.
+    position = snapshot.get("position") or {}
+    if position:
+        family = GaugeMetricFamily(
+            f"{PREFIX}_position_mm",
+            "Current commanded axis position, relative to the last origin.",
+            labels=["axis"],
+        )
+        for axis in AXES:
+            if axis in position:
+                family.add_metric([axis.lower()], position[axis])
+        yield family
 
 
 def _build_counters(snapshot):
