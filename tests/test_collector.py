@@ -13,7 +13,7 @@ def snapshot():
             "firmware_version": "3.14.1",
             "machine_type": "Prusa i3 MK3S",
         },
-        "mmu": "Version 3.0.3",
+        "mmu": {"mmu_version": "3.0.3", "mmu_build": "896"},
         "flags": {"operational": True, "printing": True, "error": False},
         "state_text": "Printing",
         "temperatures": {
@@ -62,7 +62,9 @@ class TestExposition:
         assert 'machine_type="Prusa i3 MK3S"' in output
 
     def test_mmu_info_exposed_when_present(self, snapshot):
-        assert 'octoprint_printer_mmu_info{mmu="Version 3.0.3"} 1.0' in render(snapshot)
+        output = render(snapshot)
+        assert 'mmu_version="3.0.3"' in output
+        assert 'mmu_build="896"' in output
 
     def test_mmu_info_omitted_when_unknown(self, snapshot):
         snapshot["mmu"] = None

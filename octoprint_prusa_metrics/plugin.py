@@ -17,11 +17,11 @@ from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_l
 from .collector import build_metrics
 from .parsing import (
     ExtrusionTracker,
+    MmuVersionTracker,
     MovementTracker,
     firmware_labels,
     parse_fan_speed,
     parse_m115,
-    parse_mmu_line,
 )
 
 __plugin_name__ = "Prusa Metrics"
@@ -49,7 +49,7 @@ class PrusaMetricsPlugin(
         self._lock = threading.RLock()
         self._registry = CollectorRegistry()
         self._firmware = None
-        self._mmu = None
+        self._mmu = MmuVersionTracker()
         self._clients = 0
         self._fan_speed = 0.0
         self._extrusion = ExtrusionTracker()
@@ -106,10 +106,9 @@ class PrusaMetricsPlugin(
                 with self._lock:
                     self._firmware = firmware_labels(fields)
 
-        mmu = parse_mmu_line(line)
-        if mmu:
+        if "MMU" in line:
             with self._lock:
-                self._mmu = mmu
+                self._mmu.feed(line)
 
         return line
 
@@ -209,7 +208,7 @@ class PrusaMetricsPlugin(
                     "os": platform.system(),
                 },
                 "firmware": dict(self._firmware) if self._firmware else None,
-                "mmu": self._mmu,
+                "mmu": self._mmu.labels,
                 "flags": dict(state.get("flags") or {}),
                 "state_text": state.get("text"),
                 "temperatures": _clean_temperatures(temperatures),

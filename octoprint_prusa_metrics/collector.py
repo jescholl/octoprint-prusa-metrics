@@ -70,10 +70,11 @@ def _build_info(snapshot):
     if mmu:
         family = GaugeMetricFamily(
             f"{PREFIX}_printer_mmu_info",
-            "MMU descriptor as reported by the printer firmware, when available.",
-            labels=["mmu"],
+            "MMU firmware version, reassembled from the S0-S3 protocol reads the "
+            "printer issues during MMU initialisation.",
+            labels=list(mmu.keys()),
         )
-        family.add_metric([str(mmu)], 1)
+        family.add_metric([str(v) for v in mmu.values()], 1)
         yield family
 
 

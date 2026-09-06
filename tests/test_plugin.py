@@ -80,9 +80,22 @@ class TestFirmwareCapture:
     def test_firmware_absent_before_any_m115(self, plugin):
         assert plugin.build_snapshot()["firmware"] is None
 
-    def test_mmu_line_captured(self, plugin):
-        plugin.on_gcode_received(None, "MMU2:Version 3.0.3")
-        assert plugin.build_snapshot()["mmu"] == "Version 3.0.3"
+    def test_mmu_version_captured_from_protocol_reads(self, plugin):
+        # Verbatim from the MK3S+/MMU3 init exchange.
+        for line in (
+            "echo:MMU2:<S0 A3*22.",
+            "echo:MMU2:<S1 A0*34.",
+            "echo:MMU2:<S2 A3*70.",
+            "echo:MMU2:<S3 A380*d9.",
+        ):
+            plugin.on_gcode_received(None, line)
+        assert plugin.build_snapshot()["mmu"] == {
+            "mmu_version": "3.0.3",
+            "mmu_build": "896",
+        }
+
+    def test_mmu_absent_before_init_exchange(self, plugin):
+        assert plugin.build_snapshot()["mmu"] is None
 
 
 class TestGcodeSent:

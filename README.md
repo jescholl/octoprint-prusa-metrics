@@ -22,7 +22,7 @@ publicly.
 | --- | --- | --- |
 | `octoprint_info` | gauge | OctoPrint/plugin/Python versions, hostname, OS |
 | `octoprint_printer_firmware_info` | gauge | Firmware name/version, machine type, extruder count |
-| `octoprint_printer_mmu_info` | gauge | MMU descriptor, only if the firmware reports one |
+| `octoprint_printer_mmu_info` | gauge | MMU firmware version + build, on MMU-equipped printers |
 | `octoprint_printer_flag{flag}` | gauge | `operational`, `printing`, `paused`, `error`, … |
 | `octoprint_printer_state{state}` | gauge | Current state as a label |
 | `octoprint_temperature_actual_celsius{sensor}` | gauge | Per tool and bed |
@@ -61,10 +61,12 @@ names into metrics.
   issues `M115` as part of its own connection handshake and the plugin parses
   the reply as it streams past. It does not send `M115` itself, since that
   would break the read-only posture.
-- **MMU firmware version may never populate.** The MMU talks to the Einsy
-  board over its own UART sub-protocol rather than the `M115` exchange. The
-  plugin captures an `MMU…:` line opportunistically if the firmware emits one;
-  on a given firmware it may simply never appear.
+- **MMU firmware version appears only after an MMU initialisation** observed
+  while OctoPrint is connected. It does not come from `M115` — the printer
+  reads it from the MMU as four separate protocol queries (`S0`-`S3` for
+  major/minor/revision/build) during MMU startup, and the plugin reassembles
+  them from the responses. The build number is transmitted in hex, so
+  `<S3 A380` is build 896. Verified against a real MK3S+/MMU3.
 - **Not collected:** Raspberry Pi core temperature. That is a host metric, not
   an OctoPrint one — use node_exporter, which also works when OctoPrint runs
   somewhere other than a Pi.

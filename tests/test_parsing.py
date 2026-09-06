@@ -1,11 +1,11 @@
 from octoprint_prusa_metrics.parsing import (
     ExtrusionTracker,
+    MmuVersionTracker,
     MovementTracker,
     extract_version,
     firmware_labels,
     parse_fan_speed,
     parse_m115,
-    parse_mmu_line,
     strip_gcode_comment,
 )
 
@@ -83,14 +83,55 @@ class TestFirmwareLabels:
         assert labels["extruder_count"] == "1"
 
 
-class TestParseMmuLine:
-    def test_extracts_descriptor(self):
-        assert parse_mmu_line("MMU2:Version 3.0.3") == "Version 3.0.3"
+class TestMmuVersionTracker:
+    # Captured verbatim from the MK3S+/MMU3 serial stream. Values are hex:
+    # S3 A380 -> 0x380 -> build 896, which matches the firmware on the unit.
+    REAL_EXCHANGE = [
+        "echo:MMU2:<S0 A3*22.",
+        "echo:MMU2:<S1 A0*34.",
+        "echo:MMU2:<S2 A3*70.",
+        "echo:MMU2:<S3 A380*d9.",
+    ]
 
-    def test_ignores_unrelated_lines(self):
-        assert parse_mmu_line("ok") is None
-        assert parse_mmu_line("") is None
-        assert parse_mmu_line(None) is None
+    def test_reassembles_real_printer_version(self):
+        t = MmuVersionTracker()
+        for line in self.REAL_EXCHANGE:
+            t.feed(line)
+        assert t.version == "3.0.3"
+        assert t.build == "896"
+        assert t.labels == {"mmu_version": "3.0.3", "mmu_build": "896"}
+
+    def test_build_is_parsed_as_hex_not_decimal(self):
+        t = MmuVersionTracker()
+        t.feed("echo:MMU2:<S3 A380*d9.")
+        assert t.build == "896"
+
+    def test_version_unknown_until_all_parts_arrive(self):
+        t = MmuVersionTracker()
+        t.feed("echo:MMU2:<S0 A3*22.")
+        t.feed("echo:MMU2:<S1 A0*34.")
+        assert t.version is None
+        assert t.labels is None
+        t.feed("echo:MMU2:<S2 A3*70.")
+        assert t.version == "3.0.3"
+
+    def test_version_available_without_build(self):
+        t = MmuVersionTracker()
+        for line in self.REAL_EXCHANGE[:3]:
+            t.feed(line)
+        assert t.labels == {"mmu_version": "3.0.3", "mmu_build": ""}
+
+    def test_ignores_other_mmu_traffic(self):
+        t = MmuVersionTracker()
+        # Ordinary polling and the error state seen during the 04506 fault.
+        for line in ("echo:MMU2:<X0 E8008*1b.", "echo:MMU2:<R8 A1*98.", "ok", ""):
+            t.feed(line)
+        assert t.version is None
+
+    def test_handles_none(self):
+        t = MmuVersionTracker()
+        t.feed(None)
+        assert t.version is None
 
 
 class TestStripGcodeComment:

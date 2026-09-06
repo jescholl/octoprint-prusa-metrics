@@ -12,10 +12,10 @@ _M115_KEY_RE = re.compile(r"\b(?P<key>[A-Z][A-Z0-9_]*):")
 # "3.14.1+8237", which is neither a clean version nor the full build id.
 _VERSION_RE = re.compile(r"(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z._]+)?)")
 
-# Prusa reports the MMU on its own line rather than inside M115, e.g.
-# ``MMU2:Version 3.0.3`` or ``MMU2:Not responding``. Captured opportunistically;
-# see README - this may never fire on a given firmware.
-_MMU_RE = re.compile(r"\bMMU\d*:\s*(?P<value>.+)$")
+# The printer queries the MMU's firmware version once during MMU init, as four
+# separate protocol reads S0-S3 (major/minor/revision/build). Responses look
+# like ``echo:MMU2:<S3 A380*d9.`` and the value is HEX -- 0x380 is build 896.
+_MMU_VERSION_RE = re.compile(r"MMU\d*:<S(?P<index>[0-3])\s+A(?P<value>[0-9a-fA-F]+)")
 
 _FAN_SET_RE = re.compile(r"^M106\b")
 _FAN_OFF_RE = re.compile(r"^M107\b")
@@ -77,12 +77,49 @@ def firmware_labels(fields):
     }
 
 
-def parse_mmu_line(line):
-    """Return the MMU descriptor from a firmware line, or ``None``."""
-    if not line:
-        return None
-    match = _MMU_RE.search(line.strip())
-    return match.group("value").strip() if match else None
+class MmuVersionTracker:
+    """Reassembles the MMU firmware version from the S0-S3 protocol reads.
+
+    The printer issues these once per MMU initialisation, so the version only
+    becomes known after an MMU startup observed while OctoPrint is connected --
+    the same constraint that applies to the printer's own M115 response.
+
+    Verified against a real MK3S+/MMU3: S0=3, S1=0, S2=3, S3=0x380 reassembles
+    to 3.0.3 build 896, matching the firmware actually flashed to the unit.
+    """
+
+    MAJOR, MINOR, REVISION, BUILD = 0, 1, 2, 3
+
+    def __init__(self):
+        self._parts = {}
+
+    def feed(self, line):
+        if not line:
+            return
+        match = _MMU_VERSION_RE.search(line)
+        if match:
+            self._parts[int(match.group("index"))] = int(match.group("value"), 16)
+
+    @property
+    def version(self):
+        """Dotted version, or None until major/minor/revision have all arrived."""
+        needed = (self.MAJOR, self.MINOR, self.REVISION)
+        if not all(part in self._parts for part in needed):
+            return None
+        return ".".join(str(self._parts[part]) for part in needed)
+
+    @property
+    def build(self):
+        build = self._parts.get(self.BUILD)
+        return str(build) if build is not None else None
+
+    @property
+    def labels(self):
+        """Label set for the info metric, or None if the version is unknown."""
+        version = self.version
+        if version is None:
+            return None
+        return {"mmu_version": version, "mmu_build": self.build or ""}
 
 
 class ExtrusionTracker:
