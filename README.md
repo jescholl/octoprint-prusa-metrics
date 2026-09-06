@@ -12,8 +12,8 @@ or control surface.
 GET /plugin/prusa_metrics/metrics
 ```
 
-Unauthenticated, because it is scraped by Prometheus over the in-cluster
-Connect mesh, which cannot present an OctoPrint API key. Do not expose it
+Unauthenticated, so that a Prometheus scraper with no way to present an
+OctoPrint API key can reach it. Keep it on a trusted network; do not expose it
 publicly.
 
 ## Metrics
@@ -58,8 +58,7 @@ Job file names are deliberately **not** exposed as labels.
 
 ## Install
 
-Installed declaratively from a pinned tag archive; see the `octoprint` Nomad
-job in the `infra` repo. Manually, the equivalent is:
+Install from a pinned tag archive:
 
 ```
 pip install https://github.com/jescholl/octoprint-prusa-metrics/archive/refs/tags/v0.1.0.zip
