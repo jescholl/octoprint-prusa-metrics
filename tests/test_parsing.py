@@ -190,6 +190,21 @@ class TestMmuLiveState:
         assert t.named_registers["selector_slot"] == 5
         assert t.named_registers["idler_slot"] == 5
 
+    def test_axis_jam_errors_carry_a_support_url(self):
+        # HOMING_FAILED/MOVE_FAILED are reported with the failing axis bit set;
+        # these are physical obstructions, not TMC driver faults.
+        for line, lcd in (
+            ("echo:MMU2:<X0 E8087*aa.", "04115"),  # selector cannot home
+            ("echo:MMU2:<X0 E808b*aa.", "04116"),  # selector cannot move
+            ("echo:MMU2:<X0 E8107*aa.", "04125"),  # idler cannot home
+            ("echo:MMU2:<X0 E810b*aa.", "04126"),  # idler cannot move
+            ("echo:MMU2:<X0 E8047*aa.", "04105"),  # pulley stalled
+        ):
+            t = MmuTracker()
+            t.feed(line)
+            assert t.error_labels["lcd_code"] == lcd, line
+            assert t.error_labels["url"] == f"https://prusa.io/{lcd}"
+
     def test_progress_code_is_named(self):
         t = MmuTracker()
         t.feed("echo:MMU2:<T0 P1a*3f.")

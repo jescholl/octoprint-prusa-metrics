@@ -97,8 +97,13 @@ MMU_REGISTERS = {
 
 # Protocol ErrorCode -> the 3-digit code shown on the LCD, which also forms the
 # support URL (506 -> prusa.io/04506). Derived from Prusa-Firmware's
-# mmu2_error_converter.cpp; the TMC-driver bitfield errors are deliberately
-# omitted since they are computed from bit combinations rather than a lookup.
+# mmu2_error_converter.cpp and mmu2/errors_list.h.
+#
+# The genuine TMC-driver faults (0x8200 TMC_IOIN_MISMATCH and up) are omitted:
+# the firmware derives those from bit combinations rather than a lookup, and
+# several can be raised at once. The homing and move failures below are not
+# among them -- they carry the same per-axis bits but describe something
+# physically obstructing the axis, which is the common MMU jam.
 MMU_ERROR_LCD_CODES = {
     0x8001: 101,  # FINDA didn't trigger
     0x8002: 102,  # FINDA: filament stuck
@@ -111,12 +116,21 @@ MMU_ERROR_LCD_CODES = {
     0x800A: 107,  # FINDA flickers -- inspect it
     0x800C: 507,  # filament ejected
     0x800D: 306,  # MMU MCU undervoltage
+    0x8029: 508,  # filament change
     0x802A: 108,  # load to extruder failed
     0x802B: 503,  # queue full
     0x802C: 504,  # firmware update needed
     0x802D: 402,  # protocol/communication error
     0x802E: 401,  # MMU not responding
     0x802F: 505,  # firmware runtime error
+    # HOMING_FAILED (0x8007) and MOVE_FAILED (0x800b) are always reported with
+    # the bit of the axis that failed: pulley 0x40, selector 0x80, idler 0x100.
+    0x8047: 105,  # pulley stalled -- StallGuard tripped during a pulley move
+    0x804B: 105,  # pulley cannot move
+    0x8087: 115,  # selector cannot home -- something is blocking it
+    0x808B: 116,  # selector cannot move
+    0x8107: 125,  # idler cannot home
+    0x810B: 126,  # idler cannot move
 }
 
 # From Prusa-Firmware-MMU src/logic/progress_codes.h.
