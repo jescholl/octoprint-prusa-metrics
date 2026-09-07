@@ -193,6 +193,11 @@ class TestNewSignals:
         assert "octoprint_mmu_selector_slot 2.0" in output
         assert "octoprint_mmu_idler_slot 2.0" in output
 
+    def test_slot_help_explains_the_parked_and_disengaged_value(self, snapshot):
+        output = render(snapshot)
+        assert "or 5 when it is parked" in output
+        assert "or 5 when it is disengaged" in output
+
     def test_mmu_error_carries_code_and_support_url(self, snapshot):
         output = render(snapshot)
         assert 'lcd_code="04506"' in output

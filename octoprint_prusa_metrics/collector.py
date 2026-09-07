@@ -101,9 +101,22 @@ def _build_mmu(snapshot):
         )
 
     for name, documentation in (
-        ("selector_slot", "Filament slot the MMU selector is currently on."),
-        ("idler_slot", "Filament slot the MMU idler is currently engaged with."),
-        ("pulley_position", "MMU pulley position."),
+        (
+            "selector_slot",
+            "Filament slot the MMU selector is currently on: 0-4, or 5 when it "
+            "is parked. Absent while the MMU reports no slot at all.",
+        ),
+        (
+            "idler_slot",
+            "Filament slot the MMU idler is currently engaged with: 0-4, or 5 "
+            "when it is disengaged. Reads 5 for the whole of a normal print, "
+            "since the printer's own extruder pulls the filament once loaded.",
+        ),
+        (
+            "pulley_position",
+            "Filament driven through the MMU pulley, in mm, signed and "
+            "cumulative since the MMU last powered on. Not a per-load figure.",
+        ),
     ):
         if name in registers:
             yield _gauge(f"mmu_{name}", documentation, registers[name])

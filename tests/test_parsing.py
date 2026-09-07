@@ -156,13 +156,34 @@ class TestMmuLiveState:
 
     def test_registers_captured_by_name(self):
         t = self.feed_all(self.FAULT_CYCLE)
+        # Both slot registers read 0xff during the fault -- the protocol's
+        # "empty" sentinel, so they are dropped rather than published as slots.
         assert t.named_registers == {
             "finda": 1,
-            "selector_slot": 0xFF,
-            "idler_slot": 0xFF,
             "errors": 0,
             "pulley_position": 0,
         }
+
+    def test_sentinel_slots_are_dropped_but_kept_in_the_raw_registers(self):
+        t = self.feed_all(self.FAULT_CYCLE)
+        assert t.registers[0x1B] == 0xFF
+        assert "selector_slot" not in t.named_registers
+
+    def test_slot_registers_publish_the_parked_value(self):
+        t = self.feed_all(["echo:MMU2:<R1b A5*29.", "echo:MMU2:<R1c A4*f6."])
+        assert t.named_registers["selector_slot"] == 5
+        assert t.named_registers["idler_slot"] == 4
+
+    def test_pulley_position_behind_the_origin_reads_negative(self):
+        # The MMU truncates a signed int32 of mm into the uint16 register, so
+        # -20mm arrives as 0xffec.
+        t = self.feed_all(["echo:MMU2:<R1a Affec*41."])
+        assert t.named_registers["pulley_position"] == -20
+
+    def test_pulley_position_forward_is_unchanged(self):
+        # 0x1dd is the 477mm load observed on the real printer.
+        t = self.feed_all(["echo:MMU2:<R1a A1dd*41."])
+        assert t.named_registers["pulley_position"] == 477
 
     def test_finda_matches_the_lcd_during_the_real_fault(self):
         # The printer's LCD showed "FI:1" at this moment.

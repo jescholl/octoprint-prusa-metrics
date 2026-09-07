@@ -95,6 +95,14 @@ MMU_REGISTERS = {
     0x1C: "idler_slot",
 }
 
+# Slots run 0-4, plus 5 meaning "parked" for the selector and "disengaged" for
+# the idler. The idler reads 5 for the whole of a normal print -- once filament
+# is loaded the printer's own extruder pulls it and the MMU lets go -- so a
+# disengaged idler alongside a selector sitting on a real slot is the expected
+# steady state, not a disagreement between the two.
+MMU_SLOT_PARKED = 5
+MMU_SLOT_REGISTERS = ("selector_slot", "idler_slot")
+
 # Protocol ErrorCode -> the 3-digit code shown on the LCD, which also forms the
 # support URL (506 -> prusa.io/04506). Derived from Prusa-Firmware's
 # mmu2_error_converter.cpp and mmu2/errors_list.h.
@@ -166,6 +174,23 @@ MMU_PROGRESS_CODES = {
     28: "FeedingToFSensor",
     0xFF: "Empty",
 }
+
+
+def normalise_register(name, value):
+    """Map a raw register read onto the value to publish, or None to drop it."""
+    if name in MMU_SLOT_REGISTERS:
+        # 0xff was observed on both slot registers during the real 04506 fault:
+        # that is the protocol's "empty" sentinel, not a slot the MMU is on.
+        return value if value <= MMU_SLOT_PARKED else None
+    if name == "pulley_position":
+        # The MMU holds this as a signed int32 of millimetres and the register
+        # read truncates it into a uint16, so a position behind the origin --
+        # an unload retracting past it -- arrives as ~65500 rather than a small
+        # negative. Net travel beyond 32.7m without an MMU power cycle would
+        # alias, but every load is undone by its unload, so the axis oscillates
+        # around the origin instead of accumulating that far.
+        return value - 0x10000 if value > 0x7FFF else value
+    return value
 
 
 def mmu_error_url(lcd_code):
@@ -250,12 +275,16 @@ class MmuTracker:
 
     @property
     def named_registers(self):
-        """Polled registers keyed by name, skipping any not yet seen."""
-        return {
-            name: self.registers[address]
-            for address, name in MMU_REGISTERS.items()
-            if address in self.registers
-        }
+        """Polled registers keyed by name, skipping any not yet seen and any
+        whose raw value is a sentinel rather than a reading."""
+        named = {}
+        for address, name in MMU_REGISTERS.items():
+            if address not in self.registers:
+                continue
+            value = normalise_register(name, self.registers[address])
+            if value is not None:
+                named[name] = value
+        return named
 
     @property
     def error_labels(self):
