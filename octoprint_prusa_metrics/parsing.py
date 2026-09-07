@@ -88,7 +88,7 @@ def firmware_labels(fields):
 # Registers the printer polls continuously, so their values arrive for free.
 # Addresses from Prusa-Firmware Firmware/mmu2/registers.h.
 MMU_REGISTERS = {
-    0x04: "errors",
+    0x04: "drive_errors",
     0x08: "finda",
     0x1A: "pulley_position",
     0x1B: "selector_slot",

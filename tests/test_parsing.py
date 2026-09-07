@@ -160,7 +160,7 @@ class TestMmuLiveState:
         # "empty" sentinel, so they are dropped rather than published as slots.
         assert t.named_registers == {
             "finda": 1,
-            "errors": 0,
+            "drive_errors": 0,
             "pulley_position": 0,
         }
 

@@ -61,7 +61,7 @@ the exposition to render.
 | `octoprint_mmu_selector_slot` | gauge | Slot the selector is on (`5` = parked) |
 | `octoprint_mmu_idler_slot` | gauge | Slot the idler is engaged with (`5` = disengaged, which is its state for all of a normal print) |
 | `octoprint_mmu_pulley_position` | gauge | Filament driven through the pulley, mm, signed and cumulative since the MMU powered on |
-| `octoprint_mmu_errors_total` | counter | Errors recorded by the MMU itself |
+| `octoprint_mmu_drive_errors_total` | counter | MMU drive errors (motor power rail voltage loss); filament faults are not counted here |
 | `octoprint_mmu_error{code,lcd_code,url}` | gauge | Current error; `url` links to Prusa's page for the code |
 | `octoprint_mmu_progress{code,name}` | gauge | What the MMU is doing, e.g. `FeedingToFinda` |
 

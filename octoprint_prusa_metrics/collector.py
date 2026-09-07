@@ -121,11 +121,14 @@ def _build_mmu(snapshot):
         if name in registers:
             yield _gauge(f"mmu_{name}", documentation, registers[name])
 
-    if "errors" in registers:
+    if "drive_errors" in registers:
         yield CounterMetricFamily(
-            f"{PREFIX}_mmu_errors",
-            "Errors recorded by the MMU itself, as reported by register 0x04.",
-            value=registers["errors"],
+            f"{PREFIX}_mmu_drive_errors",
+            "MMU drive errors (motor power rail voltage loss) from register "
+            "0x04, counted by the MMU in its own EEPROM. Filament faults such "
+            "as a FINDA or FSensor error do not appear here -- watch "
+            "octoprint_mmu_error for those.",
+            value=registers["drive_errors"],
         )
 
     error = snapshot.get("mmu_error")

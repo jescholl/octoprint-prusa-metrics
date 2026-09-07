@@ -20,7 +20,7 @@ def snapshot():
             "selector_slot": 2,
             "idler_slot": 2,
             "pulley_position": 17,
-            "errors": 3,
+            "drive_errors": 3,
         },
         "mmu_error": {
             "code": "0x8008",
@@ -213,8 +213,11 @@ class TestNewSignals:
     def test_mmu_progress_named(self, snapshot):
         assert 'name="FeedingToFinda"' in render(snapshot)
 
-    def test_mmu_error_counter(self, snapshot):
-        assert "octoprint_mmu_errors_total 3.0" in render(snapshot)
+    def test_mmu_drive_error_counter(self, snapshot):
+        output = render(snapshot)
+        assert "octoprint_mmu_drive_errors_total 3.0" in output
+        # The old name promised general MMU errors, which this register is not.
+        assert "octoprint_mmu_errors_total" not in output
 
     def test_heater_pwm(self, snapshot):
         output = render(snapshot)
