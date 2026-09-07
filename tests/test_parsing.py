@@ -238,6 +238,13 @@ class TestMmuLiveState:
         assert t.error_code is None
         assert t.progress_labels["name"] == "FeedingToFinda"
 
+    def test_progress_names_match_the_firmware_enum(self):
+        t = MmuTracker()
+        t.feed("echo:MMU2:<T0 P6*aa.")
+        assert t.progress_labels["name"] == "FeedingToBondtech"
+        t.feed("echo:MMU2:<T0 P24*aa.")
+        assert t.progress_labels["name"] == "ErrHwTestFailed"
+
     def test_finished_clears_error_and_progress(self):
         t = self.feed_all(self.FAULT_CYCLE)
         t.feed("echo:MMU2:<T0 F0*aa.")

@@ -149,7 +149,7 @@ MMU_PROGRESS_CODES = {
     3: "UnloadingToFinda",
     4: "UnloadingToPulley",
     5: "FeedingToFinda",
-    6: "FeedingToExtruder",
+    6: "FeedingToBondtech",
     7: "FeedingToNozzle",
     8: "AvoidingGrind",
     9: "FinishingMoves",
@@ -172,6 +172,14 @@ MMU_PROGRESS_CODES = {
     26: "Homing",
     27: "MovingSelector",
     28: "FeedingToFSensor",
+    29: "HWTestBegin",
+    30: "HWTestIdler",
+    31: "HWTestSelector",
+    32: "HWTestPulley",
+    33: "HWTestCleanup",
+    34: "HWTestExec",
+    35: "HWTestDisplay",
+    36: "ErrHwTestFailed",
     0xFF: "Empty",
 }
 
