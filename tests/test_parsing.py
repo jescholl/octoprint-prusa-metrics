@@ -174,6 +174,22 @@ class TestMmuLiveState:
         assert t.named_registers["selector_slot"] == 5
         assert t.named_registers["idler_slot"] == 4
 
+    def test_finda_sentinel_is_dropped_not_read_as_filament_present(self):
+        # 0xff is "unknown"; every non-zero value is truthy, so passing it on
+        # would publish it as "filament detected".
+        t = self.feed_all(["echo:MMU2:<R8 Aff*98."])
+        assert "finda" not in t.named_registers
+
+    def test_finda_real_values_survive(self):
+        assert self.feed_all(["echo:MMU2:<R8 A1*98."]).named_registers["finda"] == 1
+        assert self.feed_all(["echo:MMU2:<R8 A0*98."]).named_registers["finda"] == 0
+
+    def test_drive_errors_sentinel_is_dropped(self):
+        # Backs a counter, so the sentinel would read as a huge increase().
+        t = self.feed_all(["echo:MMU2:<R4 Affff*66."])
+        assert "drive_errors" not in t.named_registers
+        assert self.feed_all(["echo:MMU2:<R4 A2*66."]).named_registers["drive_errors"] == 2
+
     def test_pulley_position_behind_the_origin_reads_negative(self):
         # The MMU truncates a signed int32 of mm into the uint16 register, so
         # -20mm arrives as 0xffec.

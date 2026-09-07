@@ -190,6 +190,15 @@ def normalise_register(name, value):
         # 0xff was observed on both slot registers during the real 04506 fault:
         # that is the protocol's "empty" sentinel, not a slot the MMU is on.
         return value if value <= MMU_SLOT_PARKED else None
+    if name == "finda":
+        # A uint8 whose only real values are 0 and 1. Its 0xff sentinel has to
+        # be dropped rather than passed on, because every non-zero value is
+        # truthy and would publish "unknown" as "filament detected".
+        return value if value <= 1 else None
+    if name == "drive_errors":
+        # uint16, sentinel 0xffff. This one backs a Prometheus counter, so
+        # publishing the sentinel would register as an enormous increase().
+        return value if value < 0xFFFF else None
     if name == "pulley_position":
         # The MMU holds this as a signed int32 of millimetres and the register
         # read truncates it into a uint16, so a position behind the origin --
