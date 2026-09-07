@@ -271,10 +271,21 @@ def _job_filament_mm(job):
     return total if found else None
 
 
+# Fields Marlin emits on its M109/M190 heat-up progress line that are numbers
+# but not temperatures: the active extruder index and the residency countdown
+# in seconds. OctoPrint's temperature parser matches any "KEY:number" pair, so
+# both arrive as sensors, and it never clears a sensor once seen -- they would
+# otherwise sit in the temperature metric at their final heat-up value until
+# the next restart.
+NON_TEMPERATURE_SENSORS = frozenset({"E", "W"})
+
+
 def _clean_temperatures(temperatures):
     """Keep only sensors OctoPrint reports as dicts with numeric readings."""
     cleaned = {}
     for sensor, values in (temperatures or {}).items():
+        if sensor in NON_TEMPERATURE_SENSORS:
+            continue
         if isinstance(values, dict):
             cleaned[sensor] = {
                 "actual": values.get("actual"),

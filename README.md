@@ -115,6 +115,9 @@ Printer-specific signals are strictly additive:
 - **Temperature sensors are enumerated, not hardcoded**, so a Prusa's ambient
   (`A`) and PINDA (`P`) sensors and all five MMU tool slots are picked up
   automatically, while a single-extruder printer simply reports fewer series.
+  The two fields Marlin emits on its `M109`/`M190` heat-up line that are
+  numbers but not temperatures -- `E`, the active extruder index, and `W`, the
+  residency countdown -- are dropped.
 
 ## Install
 

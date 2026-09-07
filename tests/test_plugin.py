@@ -304,6 +304,20 @@ class TestSnapshot:
         assert snapshot["job"]["completion"] == 50.0
         assert snapshot["temperatures"]["tool0"]["actual"] == 215.0
 
+    def test_marlin_heatup_fields_are_not_reported_as_temperatures(self, plugin):
+        # "T:210.0 E:0 W:4" from M109: E is the active extruder index and W the
+        # residency countdown, both matched by OctoPrint's temperature regex.
+        plugin._printer = FakePrinter(
+            temperatures={
+                "tool0": {"actual": 210.0, "target": 215.0},
+                "A": {"actual": 38.7, "target": None},
+                "E": {"actual": 0.0, "target": None},
+                "W": {"actual": 4.0, "target": None},
+            },
+        )
+        temperatures = plugin.build_snapshot()["temperatures"]
+        assert set(temperatures) == {"tool0", "A"}
+
     def test_survives_printer_errors(self, plugin):
         plugin._printer = FakePrinter(raises=True)
         snapshot = plugin.build_snapshot()
