@@ -203,12 +203,13 @@ class TestNewSignals:
         assert 'lcd_code="04506"' in output
         assert 'url="https://prusa.io/04506"' in output
 
-    def test_mmu_error_series_present_but_unset_when_healthy(self, snapshot):
+    def test_mmu_error_exports_no_sample_when_healthy(self, snapshot):
         snapshot["mmu_error"] = None
         output = render(snapshot)
-        # The family still exists so alerts have something to match on.
-        assert "octoprint_mmu_error" in output
-        assert 'lcd_code="04506"' not in output
+        # The family is declared, but carries no sample -- so an alert has to
+        # match on the series existing, not on it being 0.
+        assert "# TYPE octoprint_mmu_error gauge" in output
+        assert "octoprint_mmu_error{" not in output
 
     def test_mmu_progress_named(self, snapshot):
         assert 'name="FeedingToFinda"' in render(snapshot)

@@ -143,15 +143,22 @@ def _build_mmu(snapshot):
     progress = snapshot.get("mmu_progress")
     yield _labelled_state(
         "mmu_progress",
-        "What the MMU is currently doing, as a progress code and its name.",
+        "What the MMU is currently doing, as a progress code and its name. "
+        "MMU operations last seconds, so at any realistic scrape interval this "
+        "samples them rather than capturing them all; treat a gap as no "
+        "information, not as an idle MMU.",
         progress,
         ["code", "name"],
     )
 
 
 def _labelled_state(name, documentation, labels, label_names):
-    """A 0/1 gauge carrying label detail, emitted as 0 with empty labels when
-    the state is absent so the series exists for alerting either way."""
+    """A gauge that exists, with label detail and a value of 1, only while the
+    state it describes is set.
+
+    Nothing is emitted when the state is absent, so alert on the series being
+    present rather than on it being 0 -- there is no 0 to match. A resolved
+    state stops being exported and goes stale on its own."""
     family = GaugeMetricFamily(f"{PREFIX}_{name}", documentation, labels=label_names)
     if labels:
         family.add_metric([str(labels.get(n, "")) for n in label_names], 1)
