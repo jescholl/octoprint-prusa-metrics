@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "octoprint-prusa-metrics"
 # Static rather than setuptools-scm: the plugin is installed from a GitHub tag
 # archive, which carries no git metadata for scm to read. Bump alongside the tag.
-version = "0.4.0"
+version = "0.5.0"
 description = "Prometheus metrics and firmware-version reporting for OctoPrint"
 readme = "README.md"
 requires-python = ">=3.7"
