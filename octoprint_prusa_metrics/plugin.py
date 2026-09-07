@@ -161,8 +161,14 @@ class PrusaMetricsPlugin(
                 self._prints["done"] += 1
                 self._record_print_finished(payload)
             elif event == Events.PRINT_FAILED:
-                self._prints["failed"] += 1
-                self._record_print_finished(payload)
+                # OctoPrint fires PRINT_FAILED *as well as* PRINT_CANCELLED for
+                # a cancelled job, from the same handler and with the same
+                # payload, distinguished only by this reason field. Counting
+                # both would book one job as two outcomes and add its elapsed
+                # time to the running total twice.
+                if (payload or {}).get("reason") != "cancelled":
+                    self._prints["failed"] += 1
+                    self._record_print_finished(payload)
             elif event == Events.PRINT_CANCELLED:
                 self._prints["cancelled"] += 1
                 self._record_print_finished(payload)

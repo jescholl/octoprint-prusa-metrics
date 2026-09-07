@@ -230,6 +230,30 @@ class TestEvents:
         assert snapshot["print_time_total"] == 160
         assert snapshot["last_print_time"] == 10
 
+    def test_a_cancelled_print_is_one_outcome_not_two(self, plugin):
+        # OctoPrint's on_comm_print_job_cancelled fires PRINT_CANCELLED and
+        # then PRINT_FAILED from the same handler, with one shared payload.
+        payload = {"time": 23.4, "reason": "cancelled"}
+        plugin.on_event(Events.PRINT_STARTED, {})
+        plugin.on_event(Events.PRINT_CANCELLED, payload)
+        plugin.on_event(Events.PRINT_FAILED, payload)
+        snapshot = plugin.build_snapshot()
+        assert snapshot["prints"] == {
+            "started": 1,
+            "done": 0,
+            "failed": 0,
+            "cancelled": 1,
+        }
+        assert snapshot["print_time_total"] == 23.4
+
+    def test_a_genuine_failure_is_still_counted(self, plugin):
+        plugin.on_event(Events.PRINT_STARTED, {})
+        plugin.on_event(Events.PRINT_FAILED, {"time": 30, "reason": "error"})
+        snapshot = plugin.build_snapshot()
+        assert snapshot["prints"]["failed"] == 1
+        assert snapshot["prints"]["cancelled"] == 0
+        assert snapshot["print_time_total"] == 30
+
     def test_per_print_extrusion_is_scoped_to_the_print(self, plugin):
         plugin.on_gcode_sent(None, "sending", "M83", None, "M83")
         plugin.on_gcode_sent(None, "sending", "G1 E10", None, "G1")
