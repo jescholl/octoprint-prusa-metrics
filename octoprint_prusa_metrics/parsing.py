@@ -25,6 +25,11 @@ _MMU_RESPONSE_RE = re.compile(
 _HOTEND_PWM_RE = re.compile(r"(?<![A-Za-z])@:(\d+)")
 _BED_PWM_RE = re.compile(r"\bB@:(\d+)")
 
+# The base RepRap/Marlin line-numbering protocol asking for one line again --
+# distinct from the MMU's own resend-shaped commands, which are addressed
+# "MMU2:..." and never start a line with this word.
+_RESEND_RE = re.compile(r"^resend\b", re.IGNORECASE)
+
 _FAN_SET_RE = re.compile(r"^M106\b")
 _FAN_OFF_RE = re.compile(r"^M107\b")
 _E_PARAM_RE = re.compile(r"\bE(-?\d+(?:\.\d+)?)")
@@ -464,6 +469,19 @@ class MovementTracker:
                 delta = value - self._pos[axis]
                 self._pos[axis] = value
             self.totals[axis] += abs(delta)
+
+
+def is_resend_request(line):
+    """True if a received line is the firmware asking to resend one gcode line.
+
+    This is the base line-numbering handshake (``Resend: N``, following an
+    ``Error:Line Number is not Last Line Number+1`` line) that every
+    Marlin-derived firmware speaks, so it works the same on any printer --
+    unlike the MMU's own protocol, which is Prusa-specific.
+    """
+    if not line:
+        return False
+    return bool(_RESEND_RE.match(line.strip()))
 
 
 def parse_fan_speed(raw_line, current):

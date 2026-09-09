@@ -346,6 +346,22 @@ def _build_counters(snapshot):
         "Timelapse movies successfully rendered.",
         value=snapshot.get("timelapse_renders", 0),
     )
+    yield CounterMetricFamily(
+        f"{PREFIX}_lines_sent",
+        "Gcode lines sent to the printer since plugin start. Pair with "
+        "octoprint_resend_requests to compute a live resend ratio -- the same "
+        "figure OctoPrint's own connection diagnostics show.",
+        value=snapshot.get("lines_sent", 0),
+    )
+    yield CounterMetricFamily(
+        f"{PREFIX}_resend_requests",
+        "Resend requests received from the printer, via the base "
+        "RepRap/Marlin line-numbering protocol -- distinct from the MMU's own "
+        "error protocol. A small, steady trickle is ordinary serial noise "
+        "(one is typical on almost every connect handshake); a rising rate "
+        "points at a flaky cable, USB port, or electrical interference.",
+        value=snapshot.get("resend_requests", 0),
+    )
 
     last_print_time = snapshot.get("last_print_time")
     if last_print_time is not None:

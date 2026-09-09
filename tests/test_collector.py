@@ -52,6 +52,8 @@ def snapshot():
         "travel_total_mm": {"X": 5000.0, "Y": 4000.0, "Z": 300.0},
         "timelapse_captures": 12,
         "timelapse_renders": 2,
+        "lines_sent": 50000,
+        "resend_requests": 3,
         "last_print_time": 3000,
         "current_print": {"extrusion": 120.0, "X": 900.0, "Y": 800.0, "Z": 40.0},
         "last_print": {"extrusion": 400.0, "X": 2000.0, "Y": 1800.0, "Z": 90.0},
@@ -140,6 +142,8 @@ class TestExposition:
         assert 'octoprint_prints_total{result="started"} 0.0' in output
         assert "octoprint_extrusion_mm_total 0.0" in output
         assert "octoprint_print_time_seconds_total 0.0" in output
+        assert "octoprint_lines_sent_total 0.0" in output
+        assert "octoprint_resend_requests_total 0.0" in output
 
     def test_empty_snapshot_does_not_raise(self):
         assert render({})
@@ -153,6 +157,11 @@ class TestExposition:
         output = render(snapshot)
         assert "octoprint_timelapse_captures_total 12.0" in output
         assert "octoprint_timelapse_renders_total 2.0" in output
+
+    def test_resend_ratio_counters(self, snapshot):
+        output = render(snapshot)
+        assert "octoprint_lines_sent_total 50000.0" in output
+        assert "octoprint_resend_requests_total 3.0" in output
 
     def test_slice_progress(self, snapshot):
         assert "octoprint_slice_progress_percent 60.0" in render(snapshot)

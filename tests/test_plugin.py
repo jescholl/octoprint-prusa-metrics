@@ -203,6 +203,36 @@ class TestGcodeSent:
         plugin.on_gcode_sent(None, "sending", None, None, None)
         assert plugin.build_snapshot()["extrusion_total_mm"] == 0.0
 
+    def test_lines_sent_counts_every_command(self, plugin):
+        plugin.on_gcode_sent(None, "sending", "M83", None, "M83")
+        plugin.on_gcode_sent(None, "sending", "G1 E4", None, "G1")
+        assert plugin.build_snapshot()["lines_sent"] == 2
+
+    def test_lines_sent_ignores_empty_command(self, plugin):
+        plugin.on_gcode_sent(None, "sending", None, None, None)
+        assert plugin.build_snapshot()["lines_sent"] == 0
+
+
+class TestResendTracking:
+    def test_resend_request_is_counted(self, plugin):
+        # Verbatim from a real MK3S+ connect handshake.
+        plugin.on_gcode_received(None, "Error:Line Number is not Last Line Number+1, Last Line: 0")
+        plugin.on_gcode_received(None, "Resend: 1")
+        assert plugin.build_snapshot()["resend_requests"] == 1
+
+    def test_multiple_resends_accumulate(self, plugin):
+        plugin.on_gcode_received(None, "Resend: 1")
+        plugin.on_gcode_received(None, "Resend: 2")
+        assert plugin.build_snapshot()["resend_requests"] == 2
+
+    def test_unrelated_lines_do_not_count(self, plugin):
+        plugin.on_gcode_received(None, "ok")
+        assert plugin.build_snapshot()["resend_requests"] == 0
+
+    def test_hook_returns_line_unmodified(self, plugin):
+        # Read-only: observing a resend must never alter what OctoPrint sees.
+        assert plugin.on_gcode_received(None, "Resend: 1") == "Resend: 1"
+
 
 class TestEvents:
     def test_client_count_tracks_open_and_close(self, plugin):

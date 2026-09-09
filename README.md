@@ -42,6 +42,8 @@ publicly.
 | `octoprint_travel_mm_total{axis}` | counter | Cumulative axis travel, `x`/`y`/`z` |
 | `octoprint_timelapse_captures_total` | counter | Frames captured |
 | `octoprint_timelapse_renders_total` | counter | Movies rendered |
+| `octoprint_lines_sent_total` | counter | Gcode lines sent to the printer |
+| `octoprint_resend_requests_total` | counter | Resend requests from the printer's line-numbering protocol; pair with `lines_sent` for a live resend ratio |
 | `octoprint_print_extrusion_mm` | gauge | Filament used **this** print; only while printing |
 | `octoprint_print_travel_mm{axis}` | gauge | Axis travel **this** print; only while printing |
 | `octoprint_last_print_time_seconds` | gauge | Duration of last finished print |
@@ -102,6 +104,10 @@ names into metrics.
 - **Arc moves (`G2`/`G3`) are not counted** toward axis travel; PrusaSlicer
   emits linear moves. Homing resets the origin without being attributed any
   travel, since the distance covered is indeterminate.
+- **One resend is normal on almost every connect.** OctoPrint's `M110` line-
+  reset handshake commonly triggers exactly one `Resend:` from the firmware
+  before streaming settles down. Watch the *rate* of
+  `octoprint_resend_requests_total`, not a bare nonzero count.
 
 ## Portability
 

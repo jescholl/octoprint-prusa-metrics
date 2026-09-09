@@ -20,6 +20,7 @@ from .parsing import (
     MmuTracker,
     MovementTracker,
     firmware_labels,
+    is_resend_request,
     parse_fan_speed,
     parse_heater_pwm,
     parse_m115,
@@ -62,6 +63,8 @@ class PrusaMetricsPlugin(
         self._timelapse_captures = 0
         self._timelapse_renders = 0
         self._slice_progress = None
+        self._lines_sent = 0
+        self._resend_requests = 0
         # Per-print figures are derived by diffing the lifetime totals against
         # a baseline captured at PrintStarted, so there is only ever one source
         # of truth for each quantity.
@@ -112,6 +115,10 @@ class PrusaMetricsPlugin(
             with self._lock:
                 self._mmu.feed(line)
 
+        if is_resend_request(line):
+            with self._lock:
+                self._resend_requests += 1
+
         # Heater PWM rides along in every temperature report.
         if "@:" in line:
             pwm = parse_heater_pwm(line)
@@ -128,6 +135,7 @@ class PrusaMetricsPlugin(
             self._extrusion.feed(cmd)
             self._movement.feed(cmd)
             self._fan_speed = parse_fan_speed(cmd, self._fan_speed)
+            self._lines_sent += 1
 
     # ~~ ProgressPlugin
 
@@ -249,6 +257,8 @@ class PrusaMetricsPlugin(
                 "travel_total_mm": dict(self._movement.totals),
                 "timelapse_captures": self._timelapse_captures,
                 "timelapse_renders": self._timelapse_renders,
+                "lines_sent": self._lines_sent,
+                "resend_requests": self._resend_requests,
                 "last_print_time": self._last_print_time,
                 # Live per-print figures only while a print is running; the
                 # frozen last_print_* set is what remains between prints.

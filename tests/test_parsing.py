@@ -4,6 +4,7 @@ from octoprint_prusa_metrics.parsing import (
     MovementTracker,
     extract_version,
     firmware_labels,
+    is_resend_request,
     parse_fan_speed,
     parse_heater_pwm,
     parse_m115,
@@ -475,4 +476,32 @@ class TestParseFanSpeed:
 
     def test_unrelated_command_keeps_current(self):
         assert parse_fan_speed("G1 X10", 128.0) == 128.0
+
+
+class TestIsResendRequest:
+    # Verbatim from a real MK3S+ connect handshake.
+    REAL_LINE = "Resend: 1"
+
+    def test_real_resend_line(self):
+        assert is_resend_request(self.REAL_LINE) is True
+
+    def test_case_insensitive_and_no_space_before_colon(self):
+        assert is_resend_request("resend:5") is True
+
+    def test_leading_whitespace_is_tolerated(self):
+        assert is_resend_request("  Resend: 12") is True
+
+    def test_unrelated_lines_are_not_matched(self):
+        assert is_resend_request("ok") is False
+        error_line = "Error:Line Number is not Last Line Number+1, Last Line: 0"
+        assert is_resend_request(error_line) is False
+
+    def test_resend_must_be_at_the_start_of_the_line(self):
+        # A word appearing mid-line (e.g. echoed back some other way) is not
+        # the firmware's resend request.
+        assert is_resend_request("echo: will resend later") is False
+
+    def test_none_and_blank(self):
+        assert is_resend_request(None) is False
+        assert is_resend_request("") is False
         assert parse_fan_speed("", 128.0) == 128.0
