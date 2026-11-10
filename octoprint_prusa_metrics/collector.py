@@ -43,6 +43,27 @@ def build_metrics(snapshot):
     yield from _build_temperatures(snapshot)
     yield from _build_job(snapshot)
     yield from _build_counters(snapshot)
+    yield from _build_event_delivery(snapshot)
+
+
+def _build_event_delivery(snapshot):
+    lag = snapshot.get("event_delivery_lag")
+    if lag is not None:
+        yield _gauge(
+            "event_delivery_lag_seconds",
+            "How long the plugin's own heartbeat event has been waiting for OctoPrint to "
+            "deliver it; 0 while delivery keeps up. OctoPrint delivers every event to every "
+            "plugin on one thread, so a plugin blocking in its event handler shows up here "
+            "as a steadily climbing value.",
+            lag,
+        )
+    last = snapshot.get("event_heartbeat_last_delivered")
+    if last is not None:
+        yield _gauge(
+            "event_heartbeat_last_delivered_timestamp_seconds",
+            "Unix time the last heartbeat event was delivered.",
+            last,
+        )
 
 
 def _build_info(snapshot):

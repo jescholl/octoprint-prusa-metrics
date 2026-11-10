@@ -2,9 +2,11 @@
 
 Prometheus metrics and printer firmware-version reporting for OctoPrint.
 
-Read-only by design: the plugin observes the gcode stream and the public
-`PrinterInterface`. It never sends a command to the printer and adds no print
-or control surface.
+Read-only towards the printer by design: the plugin observes the gcode stream and
+the public `PrinterInterface`. It never sends a command to the printer and adds no
+print or control surface. Two things reach OctoPrint itself: a heartbeat event every
+30 s to measure event delivery, and an opt-in restart of OctoPrint when that delivery
+has stalled (see *Event delivery*).
 
 ## Endpoint
 
@@ -49,6 +51,8 @@ publicly.
 | `octoprint_last_print_time_seconds` | gauge | Duration of last finished print |
 | `octoprint_last_print_extrusion_mm` | gauge | Filament used by last finished print |
 | `octoprint_last_print_travel_mm{axis}` | gauge | Axis travel of last finished print |
+| `octoprint_event_delivery_lag_seconds` | gauge | How long the plugin's heartbeat event has waited to be delivered; 0 while OctoPrint's event delivery keeps up (see *Event delivery*) |
+| `octoprint_event_heartbeat_last_delivered_timestamp_seconds` | gauge | Unix time the last heartbeat was delivered |
 
 ### MMU metrics (Prusa MMU only)
 
@@ -109,6 +113,33 @@ names into metrics.
   before streaming settles down. Watch the *rate* of
   `octoprint_resend_requests_total`, not a bare nonzero count.
 
+## Event delivery
+
+OctoPrint hands every event (print started, print done, file uploaded, ...) to every
+plugin one at a time, on a single thread. A plugin whose event handler blocks stops
+delivery to **every** plugin, with nothing logged: notifications stop, and plugins
+that react to events (starting a print after an upload, tracking a print for
+power-loss recovery) silently stop working. The plugin fires its own
+`plugin_prusa_metrics_heartbeat` event every 30 s, at most one outstanding, and
+`octoprint_event_delivery_lag_seconds` reports how long it has waited. A healthy
+OctoPrint delivers it within a fraction of a second; a stalled one shows a steadily
+climbing value. Alert on it, e.g. `octoprint_event_delivery_lag_seconds > 300`.
+
+**Optional restart** (`plugins.prusa_metrics` in `config.yaml`; off by default):
+
+| Setting | Default | |
+|---|---|---|
+| `event_stall_restart` | `false` | Restart OctoPrint when event delivery has stalled this long |
+| `event_stall_restart_minutes` | `15` | |
+
+It runs OctoPrint's own configured server restart command (*Settings → Server →
+Commands*, the one *Restart OctoPrint* uses); with none configured it only logs an
+error. It never restarts while a print is printing, paused, pausing or cancelling,
+or while any plugin's `print_recovery_pending` helper reports an interrupted print
+that may still be resumed (octoprint-power-panic offers one): every reconnect after a
+restart resets the printer. It waits for those to clear, then restarts at most once
+per OctoPrint run.
+
 ## Portability
 
 The core metrics are firmware-agnostic and work on any Marlin-derived printer:
@@ -145,8 +176,10 @@ python -m venv .venv
 ```
 
 OctoPrint is a test-only dependency: `tests/test_plugin.py` runs against the
-real plugin API so mixin/hook/event drift is caught, while `parsing.py` and
-`collector.py` import without it.
+real plugin API so mixin/hook/event drift is caught, while `parsing.py`,
+`collector.py` and `heartbeat.py` import without it.
+`tests/test_event_stall_integration.py` starts a real OctoPrint server with the virtual
+printer and `tests/support/stall_events.py`, which blocks its event thread on demand.
 
 Releases are tagged from the `version` in `pyproject.toml`, so bump it in the
 same commit as the change being released.

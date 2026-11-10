@@ -1,20 +1,27 @@
 """OctoPrint plugin exposing printer telemetry as Prometheus metrics, plus the
 printer firmware version parsed out of the M115 handshake.
 
-Read-only by design: the plugin observes the gcode stream and the public
-PrinterInterface, and never sends a command to the printer.
+Read-only towards the printer by design: the plugin observes the gcode stream and
+the public PrinterInterface, and never sends a command to the printer. Two things
+reach OctoPrint itself: a heartbeat event every 30 s, to measure event delivery, and
+an opt-in restart of OctoPrint when that delivery has stalled and no print is active
+(``event_stall_restart``, off by default).
 """
 
 import platform
+import shlex
 import socket
+import subprocess  # nosec B404
 import threading
+import time
 
 import flask
 import octoprint.plugin
-from octoprint.events import Events
+from octoprint.events import Events, eventManager
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest
 
 from .collector import build_metrics
+from .heartbeat import EventHeartbeat
 from .parsing import (
     ExtrusionTracker,
     MmuTracker,
@@ -29,6 +36,13 @@ from .parsing import (
 __plugin_name__ = "Prusa Metrics"
 __plugin_pythoncompat__ = ">=3.7,<4"
 
+HEARTBEAT_EVENT = "plugin_prusa_metrics_heartbeat"
+# How often the heartbeat thread wakes to fire a heartbeat and check for a stall.
+HEARTBEAT_TICK = 5.0
+# Helper another plugin can offer to veto a restart while an interrupted print may
+# still be resumed (octoprint-power-panic offers it).
+RECOVERY_PENDING_HELPER = "print_recovery_pending"
+
 
 class _SnapshotCollector:
     """Adapter letting prometheus_client pull a fresh snapshot per scrape."""
@@ -42,9 +56,11 @@ class _SnapshotCollector:
 
 class PrusaMetricsPlugin(
     octoprint.plugin.StartupPlugin,
+    octoprint.plugin.ShutdownPlugin,
     octoprint.plugin.EventHandlerPlugin,
     octoprint.plugin.ProgressPlugin,
     octoprint.plugin.BlueprintPlugin,
+    octoprint.plugin.SettingsPlugin,
 ):
     def __init__(self):
         super().__init__()
@@ -71,15 +87,117 @@ class PrusaMetricsPlugin(
         self._printing = False
         self._print_baseline = self._totals()
         self._last_print_totals = None
+        self._heartbeat = EventHeartbeat()
+        self._stopping = threading.Event()
 
-    # ~~ StartupPlugin
+    # ~~ SettingsPlugin
+
+    def get_settings_defaults(self):
+        return {
+            # Restart OctoPrint when its event delivery has stalled this long and no
+            # print is active. Off by default: it changes more than metrics.
+            "event_stall_restart": False,
+            "event_stall_restart_minutes": 15,
+            # Not in a UI; tests shorten it.
+            "heartbeat_interval_seconds": 30,
+        }
+
+    # ~~ StartupPlugin / ShutdownPlugin
 
     def on_after_startup(self):
         self._registry.register(_SnapshotCollector(self))
+        threading.Thread(
+            target=self._heartbeat_loop, name="prusa-metrics-heartbeat", daemon=True
+        ).start()
         self._logger.info(
             "Prusa Metrics ready; scrape /plugin/prusa_metrics/metrics. "
             "Firmware info appears after the next printer connect."
         )
+
+    def on_shutdown(self):
+        self._stopping.set()
+
+    # ~~ Event-delivery heartbeat
+
+    def _heartbeat_loop(self):
+        while not self._stopping.wait(self._heartbeat_tick_seconds()):
+            try:
+                self._heartbeat_tick(time.time())
+            except Exception:
+                self._logger.exception("Event heartbeat failed")
+
+    def _heartbeat_tick_seconds(self):
+        try:
+            interval = self._settings.get_float(["heartbeat_interval_seconds"]) or HEARTBEAT_TICK
+        except Exception:
+            interval = HEARTBEAT_TICK
+        return max(0.2, min(HEARTBEAT_TICK, interval / 2))
+
+    def _heartbeat_tick(self, now):
+        interval = self._settings.get_float(["heartbeat_interval_seconds"])
+        if self._heartbeat.due(now, interval):
+            self._heartbeat.fired(now)
+            # Queued behind whatever OctoPrint is delivering; on_event records its arrival.
+            eventManager().fire(HEARTBEAT_EVENT, {"sent": now})
+
+        enabled = self._settings.get_boolean(["event_stall_restart"])
+        threshold = self._settings.get_float(["event_stall_restart_minutes"]) * 60
+        lag = self._heartbeat.lag(now)
+        if not enabled or lag < threshold:
+            return
+        print_active = self._print_active()
+        recovery_pending = self._recovery_pending()
+        if self._heartbeat.should_restart(now, enabled, threshold, print_active, recovery_pending):
+            self._restart_octoprint(lag)
+
+    def _print_active(self):
+        """True unless the printer is certainly not printing (errs towards True)."""
+        try:
+            p = self._printer
+            return any(
+                getattr(p, name)()
+                for name in ("is_printing", "is_paused", "is_pausing", "is_cancelling")
+                if hasattr(p, name)
+            )
+        except Exception:
+            self._logger.exception("Could not read the printer state; not restarting")
+            return True
+
+    def _recovery_pending(self):
+        """True if any plugin reports an interrupted print that may still be resumed."""
+        for identifier in list(self._plugin_manager.enabled_plugins):
+            helpers = self._plugin_manager.get_helpers(identifier, RECOVERY_PENDING_HELPER)
+            helper = (helpers or {}).get(RECOVERY_PENDING_HELPER)
+            if not callable(helper):
+                continue
+            try:
+                if helper():
+                    return True
+            except Exception:
+                self._logger.exception(
+                    "%s.%s failed; not restarting", identifier, RECOVERY_PENDING_HELPER
+                )
+                return True
+        return False
+
+    def _restart_octoprint(self, lag):
+        command = self._settings.global_get(["server", "commands", "serverRestartCommand"])
+        if not command:
+            self._logger.error(
+                "OctoPrint's event delivery has stalled for %ds, but no server restart "
+                "command is configured (Settings > Server > Commands); not restarting",
+                lag,
+            )
+            return
+        self._logger.error(
+            "OctoPrint's event delivery has stalled for %ds and no print is active; "
+            "restarting OctoPrint with its configured restart command: %s",
+            lag,
+            command,
+        )
+        # The same command OctoPrint's own "Restart OctoPrint" runs (operator-configured),
+        # without a shell.
+        subprocess.Popen(shlex.split(command))  # nosec B603
 
     # ~~ BlueprintPlugin
 
@@ -156,6 +274,9 @@ class PrusaMetricsPlugin(
     # ~~ EventHandlerPlugin
 
     def on_event(self, event, payload):
+        if event == HEARTBEAT_EVENT:
+            self._heartbeat.delivered((payload or {}).get("sent"), time.time())
+            return
         with self._lock:
             if event == Events.CLIENT_OPENED:
                 self._clients += 1
@@ -259,6 +380,8 @@ class PrusaMetricsPlugin(
                 "timelapse_renders": self._timelapse_renders,
                 "lines_sent": self._lines_sent,
                 "resend_requests": self._resend_requests,
+                "event_delivery_lag": self._heartbeat.lag(time.time()),
+                "event_heartbeat_last_delivered": self._heartbeat.last_delivered,
                 "last_print_time": self._last_print_time,
                 # Live per-print figures only while a print is running; the
                 # frozen last_print_* set is what remains between prints.
@@ -332,4 +455,10 @@ def __plugin_load__():
     __plugin_hooks__ = {
         "octoprint.comm.protocol.gcode.received": plugin.on_gcode_received,
         "octoprint.comm.protocol.gcode.sent": plugin.on_gcode_sent,
+        "octoprint.events.register_custom_events": _register_custom_events,
     }
+
+
+def _register_custom_events(*args, **kwargs):
+    # Registered as "plugin_prusa_metrics_heartbeat" (OctoPrint adds the prefix).
+    return ["heartbeat"]
