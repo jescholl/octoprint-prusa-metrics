@@ -3,7 +3,8 @@ name: Release
 # Tags come from the version in pyproject.toml rather than an autotag action.
 # The plugin is installed by pinned tag-archive URL, so the tag and the packaged
 # version must agree exactly; deriving the tag from the file makes drift
-# impossible instead of merely unlikely.
+# impossible instead of merely unlikely. The release job needs the whole CI
+# workflow to pass first: nothing untested is ever tagged or published.
 on:
   push:
     branches: [main]
@@ -13,13 +14,25 @@ on:
       - '!tests/**'
       - '!.github/**'
       - '!renovate.json'
+  # Recovery: a workflow fix under .github/ does not trigger the push above.
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: ci
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
