@@ -1,4 +1,12 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["local>jescholl/renovate-config-base:renovate", "local>jescholl/renovate-config-automerge:renovate"]
+  "extends": ["local>jescholl/renovate-config-base:renovate", "local>jescholl/renovate-config-automerge:renovate"],
+  "packageRules": [
+    {
+      "description": "CI installs OctoPrint 1.11.8 for the integration tests, and OctoPrint 1.11 requires Python below 3.14.",
+      "matchManagers": ["pyenv"],
+      "matchDepNames": ["python"],
+      "allowedVersions": "<3.14"
+    }
+  ]
 }
