@@ -58,11 +58,10 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # gh creates the tag at this commit through the API. A git push would need the
+      # token persisted in .git/config, which the checkout deliberately doesn't do.
       - name: Tag and release
         if: steps.check.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          git tag "${{ steps.version.outputs.tag }}"
-          git push origin "${{ steps.version.outputs.tag }}"
-          gh release create "${{ steps.version.outputs.tag }}" --generate-notes
+        run: gh release create "${{ steps.version.outputs.tag }}" --target "${GITHUB_SHA}" --generate-notes
