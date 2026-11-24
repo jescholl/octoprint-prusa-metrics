@@ -1,10 +1,13 @@
+from octoprint_prusa_metrics.collector import BUSY_STATES
 from octoprint_prusa_metrics.parsing import (
+    BusyTracker,
     ExtrusionTracker,
     MmuTracker,
     MovementTracker,
     extract_version,
     firmware_labels,
     is_resend_request,
+    parse_busy_state,
     parse_fan_speed,
     parse_heater_pwm,
     parse_m115,
@@ -505,3 +508,76 @@ class TestIsResendRequest:
         assert is_resend_request(None) is False
         assert is_resend_request("") is False
         assert parse_fan_speed("", 128.0) == 128.0
+
+
+class TestParseBusyState:
+    # Verbatim from the MK3S+ during an MMU error, every 2 s.
+    REAL_LINE = "echo:busy: paused for user"
+
+    def test_real_paused_for_user_line(self):
+        assert parse_busy_state(self.REAL_LINE) == "paused_for_user"
+
+    def test_every_marlin_busy_state(self):
+        assert parse_busy_state("echo:busy: processing") == "processing"
+        assert parse_busy_state("echo:busy: paused for input") == "paused_for_input"
+
+    def test_states_are_the_metric_label_values(self):
+        lines = (
+            "echo:busy: processing",
+            "echo:busy: paused for user",
+            "echo:busy: paused for input",
+        )
+        assert tuple(parse_busy_state(line) for line in lines) == BUSY_STATES
+
+    def test_surrounding_whitespace_and_missing_echo_prefix(self):
+        assert parse_busy_state("  busy: paused for user\n") == "paused_for_user"
+
+    def test_unrelated_lines_are_not_matched(self):
+        for line in (
+            "ok",
+            "T:215.0 /215.0 B:85.0 /85.0 T0:215.0 /215.0 @:46 B@:0 P:0.0 A:30.1",
+            "echo:MMU2:<X0 E8008",
+            "echo:busy: something else",
+            "echo:busy: paused for user, maybe",
+            "Error:Printer halted. kill() called!",
+        ):
+            assert parse_busy_state(line) is None, line
+
+    def test_none_and_blank(self):
+        assert parse_busy_state(None) is None
+        assert parse_busy_state("") is None
+
+
+class TestBusyTracker:
+    PAUSED = "echo:busy: paused for user"
+
+    def test_not_busy_before_any_keepalive(self):
+        assert BusyTracker().state(100.0) is None
+
+    def test_state_holds_while_keepalives_repeat(self):
+        tracker = BusyTracker()
+        for now in range(0, 600, 2):  # ten minutes of 2 s keepalives
+            tracker.feed(self.PAUSED, float(now))
+            assert tracker.state(now + 1.9) == "paused_for_user"
+
+    def test_state_ends_once_keepalives_stop(self):
+        tracker = BusyTracker()
+        tracker.feed(self.PAUSED, 50.0)
+        assert tracker.state(50.0 + BusyTracker.EXPIRY_SECONDS) == "paused_for_user"
+        assert tracker.state(50.0 + BusyTracker.EXPIRY_SECONDS + 0.1) is None
+
+    def test_a_new_state_replaces_the_old_one(self):
+        tracker = BusyTracker()
+        tracker.feed("echo:busy: processing", 0.0)
+        tracker.feed(self.PAUSED, 1.0)
+        assert tracker.state(2.0) == "paused_for_user"
+
+    def test_other_lines_neither_set_nor_clear_it(self):
+        # Temperature reports and acks arrive between keepalives during a pause.
+        tracker = BusyTracker()
+        tracker.feed("ok", 0.0)
+        assert tracker.state(0.5) is None
+        tracker.feed(self.PAUSED, 1.0)
+        tracker.feed("T:215.0 /215.0 B:85.0 /85.0 @:46 B@:0", 2.0)
+        tracker.feed("ok", 2.5)
+        assert tracker.state(3.0) == "paused_for_user"

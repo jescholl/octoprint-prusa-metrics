@@ -30,6 +30,11 @@ _BED_PWM_RE = re.compile(r"\bB@:(\d+)")
 # "MMU2:..." and never start a line with this word.
 _RESEND_RE = re.compile(r"^resend\b", re.IGNORECASE)
 
+# Marlin's host keepalive: while a command runs long or the printer waits for
+# someone, the firmware repeats its busy state every couple of seconds, e.g.
+# "echo:busy: paused for user". Nothing marks the end; the lines just stop.
+_BUSY_RE = re.compile(r"^(?:echo:\s*)?busy:\s*(processing|paused for user|paused for input)$")
+
 _FAN_SET_RE = re.compile(r"^M106\b")
 _FAN_OFF_RE = re.compile(r"^M107\b")
 _E_PARAM_RE = re.compile(r"\bE(-?\d+(?:\.\d+)?)")
@@ -482,6 +487,50 @@ def is_resend_request(line):
     if not line:
         return False
     return bool(_RESEND_RE.match(line.strip()))
+
+
+def parse_busy_state(line):
+    """The busy state a host keepalive line reports, else None.
+
+    Returns ``processing``, ``paused_for_user`` or ``paused_for_input``. The
+    keepalive is part of the base Marlin protocol, so this works on any
+    Marlin-derived printer that has it enabled.
+    """
+    if not line:
+        return None
+    match = _BUSY_RE.match(line.strip())
+    return match.group(1).replace(" ", "_") if match else None
+
+
+class BusyTracker:
+    """The firmware's current busy state, from its host keepalive lines.
+
+    The firmware repeats the state once per keepalive interval (2 s by default)
+    and never says when it has stopped, so a state stays current only until
+    ``EXPIRY_SECONDS`` pass without it being repeated. Every method takes ``now``,
+    in monotonic seconds, so tests drive time directly.
+    """
+
+    # Five default keepalive intervals: rides out a late line, and still ends a
+    # state within seconds of the last keepalive. An interval set longer than
+    # this with M113 would make the state flicker between keepalives.
+    EXPIRY_SECONDS = 10.0
+
+    def __init__(self):
+        self._state = None
+        self._last_seen = None
+
+    def feed(self, line, now):
+        state = parse_busy_state(line)
+        if state is not None:
+            self._state = state
+            self._last_seen = now
+
+    def state(self, now):
+        """The busy state now, or None when the printer is not busy."""
+        if self._state is None or now - self._last_seen > self.EXPIRY_SECONDS:
+            return None
+        return self._state
 
 
 def parse_fan_speed(raw_line, current):

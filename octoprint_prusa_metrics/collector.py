@@ -22,6 +22,10 @@ STATE_FLAGS = (
     "closedOrError",
 )
 
+# Busy states from the firmware's host keepalive, as parsing.parse_busy_state
+# names them. A labelled 0/1 gauge like the state flags.
+BUSY_STATES = ("processing", "paused_for_user", "paused_for_input")
+
 PRINT_RESULTS = ("started", "done", "failed", "cancelled")
 
 AXES = ("X", "Y", "Z")
@@ -195,6 +199,20 @@ def _build_state(snapshot):
     )
     for flag in STATE_FLAGS:
         family.add_metric([flag], 1 if flags.get(flag) else 0)
+    yield family
+
+    busy = snapshot.get("busy_state")
+    family = GaugeMetricFamily(
+        f"{PREFIX}_printer_busy",
+        "The firmware's busy state from its host keepalive, 1 for the current one: "
+        "paused_for_user while the printer waits for someone (an error screen such as "
+        "an MMU error, a filament change, a prompt), processing while a command runs "
+        "long. All 0 when the printer is not busy. OctoPrint's own state keeps saying "
+        "printing throughout.",
+        labels=["state"],
+    )
+    for state in BUSY_STATES:
+        family.add_metric([state], 1 if busy == state else 0)
     yield family
 
     state_text = snapshot.get("state_text")

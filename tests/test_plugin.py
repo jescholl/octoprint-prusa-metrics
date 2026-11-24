@@ -355,5 +355,19 @@ class TestSnapshot:
         assert snapshot["state_text"] is None
         assert snapshot["info"]["octoprint_version"] != ""
 
+    def test_paused_for_user_keepalive_is_exported(self, plugin):
+        plugin.on_gcode_received(None, "echo:busy: paused for user")
+        snapshot = plugin.build_snapshot()
+        assert snapshot["busy_state"] == "paused_for_user"
+        assert 'octoprint_printer_busy{state="paused_for_user"} 1.0' in render_snapshot(snapshot)
+
+    def test_not_busy_without_a_keepalive(self, plugin):
+        plugin.on_gcode_received(None, "ok")
+        assert plugin.build_snapshot()["busy_state"] is None
+
+    def test_busy_hook_returns_line_unmodified(self, plugin):
+        line = "echo:busy: paused for user"
+        assert plugin.on_gcode_received(None, line) == line
+
     def test_reports_octoprint_version(self, plugin):
         assert plugin.build_snapshot()["info"]["octoprint_version"] == "1.11.8"

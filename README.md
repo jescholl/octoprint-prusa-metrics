@@ -29,6 +29,7 @@ publicly.
 | `octoprint_job_filament_estimate_mm` | gauge | Slicer's filament estimate for the job |
 | `octoprint_printer_flag{flag}` | gauge | `operational`, `printing`, `paused`, `error`, … |
 | `octoprint_printer_state{state}` | gauge | Current state as a label |
+| `octoprint_printer_busy{state}` | gauge | Firmware busy state from its host keepalive, 1 for the current one: `paused_for_user` (waiting for someone at the printer: an error screen, a filament change, a prompt), `paused_for_input`, `processing` (a command running long); all 0 when not busy |
 | `octoprint_temperature_actual_celsius{sensor}` | gauge | Per tool and bed |
 | `octoprint_temperature_target_celsius{sensor}` | gauge | Per tool and bed |
 | `octoprint_job_completion_percent` | gauge | Omitted when idle |
@@ -112,6 +113,12 @@ names into metrics.
   reset handshake commonly triggers exactly one `Resend:` from the firmware
   before streaming settles down. Watch the *rate* of
   `octoprint_resend_requests_total`, not a bare nonzero count.
+- **`octoprint_printer_busy` comes from the firmware's host keepalive**
+  (`echo:busy: ...`, every 2 s by default; on in Prusa firmware). OctoPrint
+  keeps reporting *printing* while the printer sits on an error screen or a
+  prompt, so this is the signal that it is waiting for someone. A state ends
+  10 s after its last keepalive, so an interval set longer than that with
+  `M113` makes it flicker. Firmware without the keepalive reports all 0.
 
 ## Event delivery
 
@@ -143,7 +150,7 @@ per OctoPrint run.
 ## Portability
 
 The core metrics are firmware-agnostic and work on any Marlin-derived printer:
-temperatures, heater PWM, state, job progress, print counters, travel,
+temperatures, heater PWM, state, busy state, job progress, print counters, travel,
 extrusion, fan speed, position, and `M115` firmware info.
 
 Printer-specific signals are strictly additive:

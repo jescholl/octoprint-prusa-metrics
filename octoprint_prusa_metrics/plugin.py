@@ -23,6 +23,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_l
 from .collector import build_metrics
 from .heartbeat import EventHeartbeat
 from .parsing import (
+    BusyTracker,
     ExtrusionTracker,
     MmuTracker,
     MovementTracker,
@@ -68,6 +69,7 @@ class PrusaMetricsPlugin(
         self._registry = CollectorRegistry()
         self._firmware = None
         self._mmu = MmuTracker()
+        self._busy = BusyTracker()
         self._heater_pwm = {}
         self._clients = 0
         self._fan_speed = 0.0
@@ -237,6 +239,10 @@ class PrusaMetricsPlugin(
             with self._lock:
                 self._resend_requests += 1
 
+        if "busy:" in line:
+            with self._lock:
+                self._busy.feed(line, time.monotonic())
+
         # Heater PWM rides along in every temperature report.
         if "@:" in line:
             pwm = parse_heater_pwm(line)
@@ -362,6 +368,7 @@ class PrusaMetricsPlugin(
                 "job_filament_mm": _job_filament_mm(job),
                 "flags": dict(state.get("flags") or {}),
                 "state_text": state.get("text"),
+                "busy_state": self._busy.state(time.monotonic()),
                 "temperatures": _clean_temperatures(temperatures),
                 "job": {
                     "completion": progress.get("completion"),

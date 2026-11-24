@@ -115,6 +115,18 @@ class TestExposition:
     def test_unreported_flag_defaults_to_zero(self, snapshot):
         assert 'octoprint_printer_flag{flag="paused"} 0.0' in render(snapshot)
 
+    def test_busy_state_is_one_for_the_current_state(self, snapshot):
+        snapshot["busy_state"] = "paused_for_user"
+        output = render(snapshot)
+        assert 'octoprint_printer_busy{state="paused_for_user"} 1.0' in output
+        assert 'octoprint_printer_busy{state="processing"} 0.0' in output
+        assert 'octoprint_printer_busy{state="paused_for_input"} 0.0' in output
+
+    def test_busy_state_all_zero_when_not_busy(self, snapshot):
+        output = render(snapshot)
+        for state in ("processing", "paused_for_user", "paused_for_input"):
+            assert f'octoprint_printer_busy{{state="{state}"}} 0.0' in output
+
     def test_job_metrics(self, snapshot):
         output = render(snapshot)
         assert "octoprint_job_completion_percent 42.5" in output
